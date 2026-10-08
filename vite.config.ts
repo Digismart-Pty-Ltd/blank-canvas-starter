@@ -1,15 +1,67 @@
-// @lovable.dev/vite-tanstack-config already includes the following — do NOT add them manually
-// or the app will break with duplicate plugins:
-//   - TanStack devtools (dev-only, first), tanstackStart, viteReact, tailwindcss, tsConfigPaths,
-//     nitro (build-only using cloudflare as a default target), VITE_* env injection, @ path alias,
-//     React/TanStack dedupe, error logger plugins, and sandbox detection (port/host/strictPort).
-// You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
-import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import tsconfigPaths from "vite-tsconfig-paths";
+import path from "node:path";
+import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  tanstackStart: {
-    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-    // nitro/vite builds from this
-    server: { entry: "server" },
+  plugins: [
+    react(),
+    tailwindcss(),
+    tsconfigPaths(),
+    VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      registerType: "autoUpdate",
+      injectManifest: {
+        swSrc: "src/sw.ts",
+        swDest: "dist/sw.js",
+      },
+      includeAssets: ["wh-logo.jpeg"],
+      manifest: false, // manifest is handled manually via public/manifest/*.json — don't let the plugin generate/inject its own
+    }),
+  ],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  server: {
+    host: "::",
+    port: 8080,
+  },
+  build: {
+    rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, "index.html"),
+          admin: path.resolve(__dirname, "admin.html"),
+        },
+      output: {
+        // Split the shared "everyone needs this" bundle into separate
+        // vendor chunks so the browser can cache them independently —
+        // e.g. a deploy that only changes app code won't force visitors
+        // to re-download Firebase or React again.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+
+          if (id.includes("firebase")) return "vendor-firebase";
+          if (id.includes("react-router")) return "vendor-router";
+          if (
+            id.includes("/react-dom/") ||
+            id.includes("/react/") ||
+            id.includes("scheduler")
+          )
+            return "vendor-react";
+          if (id.includes("@tanstack")) return "vendor-query";
+          if (id.includes("xlsx")) return "vendor-xlsx";
+          if (id.includes("lucide-react")) return "vendor-icons";
+          if (id.includes("html5-qrcode")) return "vendor-qrcode";
+
+          return "vendor";
+        },
+      },
+    },
   },
 });

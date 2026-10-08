@@ -1,0 +1,32 @@
+{
+  "name": "WH Fitness Admin",
+  "short_name": "WH Admin",
+  "description": "Admin dashboard",
+  "id": "/admin/?pwa=admin",
+  "start_url": "/admin/?pwa=admin",
+  "scope": "/admin/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/wh-logo-180-admin.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/wh-logo-192-admin.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/wh-logo-512-admin.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

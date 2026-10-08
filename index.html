@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- PWA -->
+    <link rel="manifest" id="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#000000" id="theme-color" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="WH Fitness" id="apple-title" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/png" href="/wh-logo-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/wh-logo-180.png" id="apple-icon" />
+
+    <!-- Swap manifest/icon/title for /admin BEFORE anything renders,
+         so iOS reads the right manifest whenever "Add to Home Screen" is tapped -->
+    <script>
+      (function () {
+        var isAdmin = window.location.pathname.startsWith('/admin');
+        if (isAdmin) {
+          document.getElementById('manifest').setAttribute('href', '/admin-manifest.json');
+          document.getElementById('apple-title').setAttribute('content', 'WH Admin');
+          document.getElementById('apple-icon').setAttribute('href', '/wh-logo-180-admin.png');
+          document.getElementById('theme-color').setAttribute('content', '#000000');
+        }
+      })();
+    </script>
+
+    <title>Waven Harper Fitness — Train. Run. Rise.</title>
+
+    <meta
+      name="description"
+      content="Personal training, the Little Falls Runners community, races, rewards. Built for runners who turn up."
+    />
+
+    <meta property="og:title" content="Waven Harper Fitness" />
+    <meta
+      property="og:description"
+      content="Personal training & the Little Falls Runners community club."
+    />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
