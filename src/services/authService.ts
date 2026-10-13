@@ -1,12 +1,6 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signInAnonymously,
-  signOut,
-  updateProfile,
-} from "firebase/auth";
-import { doc, setDoc, updateDoc } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { signInAnonymously } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { supabase } from "@/integrations/supabase/client";
 
 export async function registerMember(data: {
   name: string;
@@ -16,69 +10,71 @@ export async function registerMember(data: {
   contact: string;
   emergency: string;
 }) {
-  const cred = await createUserWithEmailAndPassword(auth, data.email, data.password);
-  await updateProfile(cred.user, { displayName: data.name });
-  await setDoc(doc(db, "users", cred.user.uid), {
-    name: data.name,
+  const { data: res, error } = await supabase.auth.signUp({
     email: data.email,
-    idNumber: data.idNumber,
-    contact: data.contact,
-    emergency: data.emergency,
-    role: "member",
-    races: 0,
-    tier: "Pink",
-    joined: new Date().toISOString(),
-    createdAt: Date.now(),
-    waiverAccepted: true,
-    waiverAcceptedAt: new Date().toISOString(),
+    password: data.password,
+    options: {
+      emailRedirectTo: window.location.origin,
+      data: {
+        name: data.name,
+        id_number: data.idNumber,
+        contact: data.contact,
+        emergency: data.emergency,
+        member_kind: "member",
+        waiver_accepted: "true",
+      },
+    },
   });
-  return cred.user;
+  if (error) throw error;
+  return res;
 }
 
 export async function registerOpenRunner(data: { name: string; email: string; password: string }) {
-  const cred = await createUserWithEmailAndPassword(auth, data.email, data.password);
-  await updateProfile(cred.user, { displayName: data.name });
-  await setDoc(doc(db, "users", cred.user.uid), {
-    name: data.name,
+  const { data: res, error } = await supabase.auth.signUp({
     email: data.email,
-    role: "open",
-    joined: new Date().toISOString(),
-    createdAt: Date.now(),
-    waiverAccepted: true,
-    waiverAcceptedAt: new Date().toISOString(),
+    password: data.password,
+    options: {
+      emailRedirectTo: window.location.origin,
+      data: { name: data.name, member_kind: "open", waiver_accepted: "true" },
+    },
   });
-  return cred.user;
+  if (error) throw error;
+  return res;
 }
 
 export async function upgradeToMember(data: {
+  name: string;
   idNumber: string;
   contact: string;
   emergency: string;
 }) {
-  const currentUser = auth.currentUser;
-  if (!currentUser) throw new Error("No authenticated user.");
-
-  await updateDoc(doc(db, "users", currentUser.uid), {
-    idNumber: data.idNumber,
-    contact: data.contact,
-    emergency: data.emergency,
-    role: "member",
-    races: 0,
-    tier: "Pink",
-    upgradedAt: Date.now(),
-    waiverAccepted: true,
-    waiverAcceptedAt: new Date().toISOString(),
+  const { error } = await supabase.rpc("become_member", {
+    p_name: data.name,
+    p_id_number: data.idNumber,
+    p_contact: data.contact,
+    p_emergency: data.emergency,
   });
+  if (error) throw error;
 }
 
 export async function loginUser(email: string, password: string) {
-  return signInWithEmailAndPassword(auth, email, password);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
 }
 
 export async function logoutUser() {
-  return signOut(auth);
+  await supabase.auth.signOut();
 }
 
+export async function sendPasswordReset(email: string) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+  });
+  if (error) throw error;
+}
+
+// Admin page only — left unchanged until the admin page is migrated.
 export async function signInAsAdmin(): Promise<void> {
   if (auth.currentUser) return;
   await signInAnonymously(auth);

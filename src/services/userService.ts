@@ -1,14 +1,10 @@
-import { auth, db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { supabase } from "@/integrations/supabase/client";
 
 export async function getCurrentUserProfile() {
-  const user = auth.currentUser;
-
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData.user;
   if (!user) return null;
 
-  const snapshot = await getDoc(doc(db, "users", user.uid));
-
-  if (!snapshot.exists()) return null;
-
-  return snapshot.data();
+  const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+  return data ?? null;
 }
