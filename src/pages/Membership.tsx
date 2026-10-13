@@ -44,8 +44,8 @@ function isValidPhone(value: string) {
   return /^[+]?[\d\s\-().]{7,15}$/.test(value.trim());
 }
 
-function daysLeftFor(r: { createdAt?: string | Date; expiresInDays: number }): number | null {
-  if (!r.createdAt) return null;
+function daysLeftFor(r: { createdAt?: string | Date; expiresInDays: number | null }): number | null {
+  if (!r.createdAt || r.expiresInDays == null) return null;
   const created = new Date(r.createdAt).getTime();
   const expiry = created + r.expiresInDays * 24 * 60 * 60 * 1000;
   const msLeft = expiry - Date.now();
@@ -648,7 +648,7 @@ const redeemed = new Set(redemptions.map((r) => r.rewardId));
   >
     {daysLeftFor(r) !== null
       ? `${daysLeftFor(r)} day${daysLeftFor(r) !== 1 ? "s" : ""} left to redeem`
-      : `Expires in ${r.expiresInDays} days`}
+      : r.expiresInDays != null ? `Expires in ${r.expiresInDays} days` : ""}
   </span>
 )}
                     </div>
