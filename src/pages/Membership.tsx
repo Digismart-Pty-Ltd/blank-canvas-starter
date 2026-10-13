@@ -200,13 +200,16 @@ const { currentMember, state } = useStore();
 
     setSaving(true);
     try {
-      await setDoc(doc(db, "users", uid!), {
-        name: draftName.trim(),
-        email: user?.email ?? me?.email ?? "",
-        contact: draftContact,
-        emergency: `${draftEmergencyName} — ${draftEmergencyNumber}`,
-      }, { merge: true });
-      if (user) await updateProfile(user, { displayName: draftName.trim() });
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          name: draftName.trim(),
+          contact: draftContact,
+          emergency: `${draftEmergencyName} — ${draftEmergencyNumber}`,
+        })
+        .eq("id", uid!);
+      if (error) throw error;
+      await refreshProfile();
       setContact(draftContact);
       setEmergencyName(draftEmergencyName);
       setEmergencyNumber(draftEmergencyNumber);
@@ -270,9 +273,20 @@ async function handleRemoveRedemption(rewardId: string) {
       canvas.height = h;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bitmap, 0, 0, w, h);
-      const base64 = canvas.toDataURL("image/jpeg", 0.5);
-      await setDoc(doc(db, "users", uid!), { avatarUrl: base64 }, { merge: true });
-      setAvatarUrl(base64);
+      const blob: Blob = await new Promise((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/jpeg", 0.8),
+      );
+      const path = `${uid}/avatar.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from("avatars")
+        .upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const { error: dbErr } = await supabase
+        .from("profiles")
+        .update({ avatar_path: path })
+        .eq("id", uid);
+      if (dbErr) throw dbErr;
+      await refreshProfile();
       toast.success("Profile photo updated.");
     } catch (err) {
       console.error(err);
@@ -285,8 +299,16 @@ async function handleRemoveRedemption(rewardId: string) {
   async function handleAvatarRemove() {
     if (!uid) return;
     try {
-      await setDoc(doc(db, "users", uid), { avatarUrl: null }, { merge: true });
+      if (profile?.avatar_path) {
+        await supabase.storage.from("avatars").remove([profile.avatar_path]);
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_path: null })
+        .eq("id", uid);
+      if (error) throw error;
       setAvatarUrl(null);
+      await refreshProfile();
       toast.success("Profile photo removed.");
     } catch (err) {
       console.error(err);
