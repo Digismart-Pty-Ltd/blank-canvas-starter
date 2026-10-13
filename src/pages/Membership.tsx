@@ -30,10 +30,9 @@ import {
   query,
   where,
   onSnapshot,
-  setDoc,
 } from "firebase/firestore";
-import { updateProfile } from "firebase/auth";
 import { db } from "@/lib/firebase";
+import { supabase } from "@/integrations/supabase/client";
 import { Html5Qrcode } from "html5-qrcode";
 
 const tierMeta: Record<Tier, { color: string; need: number }> = {
@@ -57,7 +56,15 @@ function daysLeftFor(r: { createdAt?: string | Date; expiresInDays: number }): n
 }
 
 export default function Membership() {
-  const { user, isMember, loading } = useAuth();
+  const {
+    user,
+    isMember,
+    loading,
+    profile,
+    stats,
+    avatarUrl: authAvatarUrl,
+    refreshProfile,
+  } = useAuth();
 const { currentMember, state } = useStore();
 
   // ── Firestore profile state ───────────────────────────────────────────────
@@ -94,111 +101,27 @@ const { currentMember, state } = useStore();
 
   const uid = user?.uid ?? currentMember?.id;
 
-  // Fetch profile from Firestore
+  // Profile values from Lovable Cloud (loaded by the auth context)
   useEffect(() => {
-    if (!uid || !isMember) {
+    if (loading) return;
+    if (!uid || !isMember || !profile) {
       setProfileFetched(true);
       return;
     }
-    setProfileFetched(false);
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (!snap.exists()) {
-        setContact("");
-        setEmergencyName("");
-        setEmergencyNumber("");
-        setAvatarUrl(null);
-        setFirestoreTier(null);
-        setFirestoreName(null);
-        setProfileFetched(true);
-        return;
-      }
-      const data = snap.data() as {
-        contact?: string;
-        avatarUrl?: string | null;
-        tier?: Tier;
-        name?: string;
-        emergency?: string;
-      };
-      if (data.contact !== undefined) setContact(data.contact);
-      if (data.avatarUrl !== undefined) setAvatarUrl(data.avatarUrl ?? null);
-      if (data.tier) setFirestoreTier(data.tier as Tier);
-      if (data.name) setFirestoreName(data.name);
-      if (data.emergency) {
-        const parts = data.emergency.split(" — ");
-        setEmergencyName(parts[0]?.trim() ?? "");
-        setEmergencyNumber(parts[1]?.trim() ?? "");
-      }
-      setProfileFetched(true);
-    }, (err) => {
-      console.error("Membership profile listener failed:", err);
-      setProfileFetched(true);
-    });
-    return () => unsub();
-  }, [uid, isMember]);
+    setContact(profile.contact ?? "");
+    setAvatarUrl(authAvatarUrl ?? null);
+    setFirestoreTier((profile.tier as Tier) ?? null);
+    setFirestoreName(profile.name || null);
+    const parts = (profile.emergency ?? "").split(" — ");
+    setEmergencyName(parts[0]?.trim() ?? "");
+    setEmergencyNumber(parts[1]?.trim() ?? "");
+    setProfileFetched(true);
+  }, [uid, isMember, profile, authAvatarUrl, loading]);
 
-  // ── Lazy tier maintenance: Jan 1 reset + Platinum 6-month retention ────────
-  // Runs client-side whenever the member opens this page (instead of a
-  // scheduled Cloud Function). Each rule only fires once per real-world
-  // period thanks to the lastTierCheck/lastTierReset stamps.
+  // Race count comes from the server-side member stats (never written from the browser)
   useEffect(() => {
-    if (!uid || !isMember) return;
-
-    async function runTierMaintenance() {
-      const userRef = doc(db, "users", uid!);
-      const snap = await getDoc(userRef);
-      if (!snap.exists()) return;
-
-      const data = snap.data() as {
-        tier?: Tier;
-        tierResetAt?: string;
-        lastTierCheck?: string;
-      };
-      const currentTier = data.tier as Tier | undefined;
-      if (!currentTier) return;
-
-      const today = new Date();
-      const isJan1 = today.getMonth() === 0 && today.getDate() === 1;
-      const lastResetYear = data.tierResetAt ? new Date(data.tierResetAt).getFullYear() : null;
-
-      // Rule 1: annual reset on Jan 1 — only once per year, even if they
-      // open the app multiple times that day.
-      if (isJan1 && lastResetYear !== today.getFullYear()) {
-        await updateDoc(userRef, {
-          tier: "Pink",
-          tierResetAt: today.toISOString(),
-        });
-        return; // tier just changed, skip the Platinum check below this run
-      }
-
-      // Rule 2: Platinum retention — downgrade one level if fewer than 12
-      // check-ins in the trailing 6 months. Checked at most once a day.
-      if (currentTier === "Platinum") {
-        const lastChecked = data.lastTierCheck ? new Date(data.lastTierCheck) : null;
-        const checkedToday = lastChecked && lastChecked.toDateString() === today.toDateString();
-
-        if (!checkedToday) {
-          const sixMonthsAgo = new Date();
-          sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-
-          const regsQuery = query(collection(db, "eventRegistrations"), where("userId", "==", uid));
-          const regsSnap = await getDocs(regsQuery);
-          const recentCheckIns = regsSnap.docs.filter((d) => {
-            const r = d.data() as { checkedInAt?: string };
-            return r.checkedInAt && new Date(r.checkedInAt) >= sixMonthsAgo;
-          }).length;
-
-          const updates: Record<string, string> = { lastTierCheck: today.toISOString() };
-          if (recentCheckIns < 12) {
-            updates.tier = "Gold";
-            updates.tierDowngradedAt = today.toISOString();
-          }
-          await updateDoc(userRef, updates);
-        }
-      }
-    }
-
-    runTierMaintenance().catch((err) => console.error("Tier maintenance failed:", err));
-  }, [uid, isMember]);
+    setLiveRaceCount(stats ? stats.races_total : null);
+  }, [stats]);
 
   // Live listener for this member's registrations
   useEffect(() => {
@@ -210,8 +133,6 @@ const { currentMember, state } = useStore();
     const unsub = onSnapshot(q, (snap) => {
       const regs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as { eventId: string; checkedInAt?: string }) }));
       setLiveRegistrations(regs);
-      // Only count events where the member actually checked in
-      setLiveRaceCount(regs.filter((r) => r.checkedInAt).length);
     });
     return () => unsub();
   }, [uid, isMember]);
