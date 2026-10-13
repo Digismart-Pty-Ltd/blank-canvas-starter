@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { WHATSAPP_NUMBER } from "@/lib/demo-data";
-import { useStore } from "@/lib/store";
+import { useEvents } from "@/lib/api/events";
+import { useImageUrl } from "@/lib/api/images";
 import { formatDistanceKm } from "@/lib/utils";
 import community from "@/assets/community.jpg";
 import lfr from "@/assets/lfr-logo-clean.png";
@@ -10,11 +11,11 @@ import {
 } from "lucide-react";
 
 export default function Home() {
-  const { state } = useStore();
+  const { events } = useEvents();
   const waContact = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("Hi Waven — I'd like to get in touch.")}`;
 
   const todayStr = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local time
-  const upcoming = state.events
+  const upcoming = events
     .filter((e) => e.date >= todayStr)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 4);
@@ -102,8 +103,7 @@ export default function Home() {
                   <Link to="/events" key={e.id}
                     className="group relative w-[180px] shrink-0 overflow-hidden rounded-2xl border border-border bg-card">
                     <div className="relative h-[140px]">
-                      <img src={e.image} alt={e.title} loading="lazy"
-                        className="absolute inset-0 h-full w-full object-cover transition group-hover:scale-105 duration-500" />
+                      <EventThumb value={e.image} alt={e.title} />
                       <div className="absolute inset-0 bg-gradient-to-t from-card via-card/20 to-transparent" />
                       {e.membersOnly && (
                         <span className="absolute top-2 left-2 rounded-full bg-foreground/80 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-background">
@@ -215,5 +215,13 @@ function QuickLink({ icon: Icon, title, sub, to, highlight }: { icon: any; title
       </div>
       <ArrowUpRight size={13} className="absolute right-3 top-3 text-muted-foreground group-hover:text-foreground transition" />
     </Link>
+  );
+}
+function EventThumb({ value, alt }: { value: string; alt: string }) {
+  const src = useImageUrl(value, "event-images");
+  if (!src) return <div className="absolute inset-0 bg-secondary" />;
+  return (
+    <img src={src} alt={alt} loading="lazy"
+      className="absolute inset-0 h-full w-full object-cover transition group-hover:scale-105 duration-500" />
   );
 }

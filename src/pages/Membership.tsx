@@ -19,17 +19,17 @@ import {
 } from "lucide-react";
 import type { Tier } from "@/lib/demo-data";
 import { useEffect, useState, useRef } from "react";
-import {
-  doc,
-  addDoc,
-  deleteDoc,
-  collection,
-  query,
-  where,
-  onSnapshot,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { supabase } from "@/integrations/supabase/client";
+import { useEvents } from "@/lib/api/events";
+import { useMyRegistrations } from "@/lib/api/registrations";
+import {
+  useRewards,
+  useMyRedemptions,
+  redeemReward,
+  rewardsForTier,
+  REDEEM_MESSAGES,
+} from "@/lib/api/rewards";
+import { serverMessage } from "@/lib/api/errors";
 import { Html5Qrcode } from "html5-qrcode";
 
 const tierMeta: Record<Tier, { color: string; need: number }> = {
@@ -44,8 +44,8 @@ function isValidPhone(value: string) {
   return /^[+]?[\d\s\-().]{7,15}$/.test(value.trim());
 }
 
-function daysLeftFor(r: { createdAt?: string | Date; expiresInDays: number }): number | null {
-  if (!r.createdAt) return null;
+function daysLeftFor(r: { createdAt?: string | Date; expiresInDays: number | null }): number | null {
+  if (!r.createdAt || r.expiresInDays == null) return null;
   const created = new Date(r.createdAt).getTime();
   const expiry = created + r.expiresInDays * 24 * 60 * 60 * 1000;
   const msLeft = expiry - Date.now();
@@ -63,6 +63,7 @@ export default function Membership() {
     refreshProfile,
   } = useAuth();
 const { currentMember, state } = useStore();
+  const { events: allEvents } = useEvents();
 
   // ── Firestore profile state ───────────────────────────────────────────────
   const [contact, setContact] = useState("");
@@ -85,12 +86,8 @@ const { currentMember, state } = useStore();
   const [firestoreTier, setFirestoreTier] = useState<Tier | null>(null);
   const [firestoreName, setFirestoreName] = useState<string | null>(null);
 
-  // ── Firestore live registrations for this member ──────────────────────────
-  const [liveRegistrations, setLiveRegistrations] = useState<Array<{ id: string; eventId: string; checkedInAt?: string }>>([]);
   const [liveRaceCount, setLiveRaceCount] = useState<number | null>(null);
-  const [scanningReward, setScanningReward] = useState<{ id: string; title: string } | null>(null);
-  const [firestoreRewards, setFirestoreRewards] = useState<Array<{ id: string; tier: Tier; title: string; description: string; createdAt?: string; expiresInDays: number }>>([]);
-  const [redemptions, setRedemptions] = useState<Array<{ id: string; rewardId: string; redeemedAt: string }>>([]);
+  const [scanningReward, setScanningReward] = useState<{ id: string; title: string; tier: string } | null>(null);
 
   useEffect(() => {
     document.title = "Membership & Rewards — Waven Harper Fitness";
@@ -120,40 +117,10 @@ const { currentMember, state } = useStore();
     setLiveRaceCount(stats ? stats.races_total : null);
   }, [stats]);
 
-  // Live listener for this member's registrations
-  useEffect(() => {
-    if (!uid || !isMember) return;
-    const q = query(
-      collection(db, "eventRegistrations"), // ← was "registrations"
-      where("userId", "==", uid),
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const regs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as { eventId: string; checkedInAt?: string }) }));
-      setLiveRegistrations(regs);
-    });
-    return () => unsub();
-  }, [uid, isMember]);
-
-  // right after the eventRegistrations useEffect, add:
-  useEffect(() => {
-    if (!uid) return;
-    const unsub = onSnapshot(collection(db, "rewards"), (snap) => {
-      setFirestoreRewards(snap.docs.map((d) => ({ id: d.id, ...(d.data() as { tier: Tier; title: string; description: string; createdAt?: string; expiresInDays: number }) })));
-    });
-    return () => unsub();
-  }, [uid]);
-
-  useEffect(() => {
-  if (!uid) return;
-  const q = query(collection(db, "redemptions"), where("userId", "==", uid));
-  const unsub = onSnapshot(q, (snap) => {
-    setRedemptions(snap.docs.map((d) => ({ id: d.id, ...(d.data() as { rewardId: string; redeemedAt: string }) })));
-  }, (err) => {
-    console.error("Membership redemptions listener failed:", err);
-    setRedemptions([]);
-  });
-  return () => unsub();
-}, [uid]);
+  // This member's own registrations, rewards and redemptions (Lovable Cloud, live)
+  const { regs: liveRegistrations } = useMyRegistrations(isMember ? user?.uid : null);
+  const firestoreRewards = useRewards(Boolean(user));
+  const { redemptions, reload: reloadRedemptions } = useMyRedemptions(user?.uid);
 
   function startEditing() {
     setDraftName(me?.name ?? "");
@@ -220,31 +187,17 @@ const { currentMember, state } = useStore();
     }
   }
 
-  async function handleRedeemReward(rewardId: string) {
-  if (!uid) return;
-  try {
-    await addDoc(collection(db, "redemptions"), {
-      userId: uid,
-      rewardId,
-      redeemedAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error(err);
-    toast.error("Could not save redemption. Please try again.");
+  async function handleRedeemReward(rewardId: string, title: string, code: string) {
+    if (!user) return;
+    try {
+      await redeemReward(rewardId, code);
+      toast.success(`Redeemed: ${title}`);
+      reloadRedemptions();
+    } catch (err) {
+      console.error(err);
+      toast.error(serverMessage(err, REDEEM_MESSAGES) ?? "Could not save redemption. Please try again.");
+    }
   }
-}
-
-async function handleRemoveRedemption(rewardId: string) {
-  const entry = redemptions.find((r) => r.rewardId === rewardId);
-  if (!entry) return;
-  try {
-    await deleteDoc(doc(db, "redemptions", entry.id));
-    toast.success("Reward removed from your list.");
-  } catch (err) {
-    console.error(err);
-    toast.error("Could not remove reward.");
-  }
-}
 
   async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -392,23 +345,14 @@ async function handleRemoveRedemption(rewardId: string) {
   const tierOrder: Tier[] = ["Pink", "Silver", "Gold", "Platinum"];
   const myTierIndex = tierOrder.indexOf(effectiveMe.tier);
   const now = Date.now();
-  const myRewards =
-    firestoreTier === null
-      ? []
-      : firestoreRewards.filter((r) => {
-          if (r.tier !== firestoreTier) return false;
-          if (!r.createdAt) return true; // no date stamp, don't block it
-          const created = new Date(r.createdAt).getTime();
-          const expiry = created + r.expiresInDays * 24 * 60 * 60 * 1000;
-          return now <= expiry;
-        });
+  const myRewards = rewardsForTier(firestoreRewards, firestoreTier);
 const redeemed = new Set(redemptions.map((r) => r.rewardId));
 
   // Upcoming events: match live registrations against the event list
   const registeredEventIds = new Set(liveRegistrations.map((r) => r.eventId));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const myUpcoming = state.events.filter((e) => {
+  const myUpcoming = allEvents.filter((e) => {
     const eventDate = new Date(e.date);
     eventDate.setHours(0, 0, 0, 0);
     return registeredEventIds.has(e.id) && eventDate >= today;
@@ -689,23 +633,12 @@ const redeemed = new Set(redemptions.map((r) => r.rewardId));
                     <div className="mt-3 flex items-center gap-3 flex-wrap">
                       <button
                         disabled={isRedeemed}
-                        onClick={() => setScanningReward({ id: r.id, title: r.title })}
+                        onClick={() => setScanningReward({ id: r.id, title: r.title, tier: r.tier })}
                         className="rounded-full bg-primary px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-transform"
                       >
                         {isRedeemed ? "Redeemed" : "Redeem"}
                       </button>
-{isRedeemed ? (
-  <button
-    onClick={() => {
-      if (confirm("Remove this redeemed reward from your list?")) {
-        handleRemoveRedemption(r.id);
-      }
-    }}
-    className="rounded-full border border-border px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground hover:border-destructive hover:text-destructive active:scale-95 transition-all"
-  >
-    Remove
-  </button>
-) : (
+{isRedeemed ? null : (
   <span
     className={`text-[10px] uppercase tracking-widest ${
       daysLeftFor(r) !== null && daysLeftFor(r)! <= 5
@@ -715,7 +648,7 @@ const redeemed = new Set(redemptions.map((r) => r.rewardId));
   >
     {daysLeftFor(r) !== null
       ? `${daysLeftFor(r)} day${daysLeftFor(r) !== 1 ? "s" : ""} left to redeem`
-      : `Expires in ${r.expiresInDays} days`}
+      : r.expiresInDays != null ? `Expires in ${r.expiresInDays} days` : ""}
   </span>
 )}
                     </div>
@@ -767,11 +700,11 @@ const redeemed = new Set(redemptions.map((r) => r.rewardId));
 {scanningReward && (
   <QRScanModal
     rewardTitle={scanningReward.title}
-    expectedCode={`LFR-REDEEM-${(effectiveMe.tier ?? "SILVER").toUpperCase()}`}
-    onSuccess={() => {
-      handleRedeemReward(scanningReward.id);
-      toast.success(`Redeemed: ${scanningReward.title}`);
+    tierLabel={scanningReward.tier.toUpperCase()}
+    onSuccess={(code) => {
+      const target = scanningReward;
       setScanningReward(null);
+      handleRedeemReward(target.id, target.title, code);
     }}
     onClose={() => setScanningReward(null)}
   />
@@ -810,13 +743,13 @@ function ProfileField({
 
 function QRScanModal({
   rewardTitle,
-  expectedCode,
+  tierLabel,
   onSuccess,
   onClose,
 }: {
   rewardTitle: string;
-  expectedCode: string;
-  onSuccess: () => void;
+  tierLabel: string;
+  onSuccess: (code: string) => void;
   onClose: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
@@ -824,7 +757,6 @@ function QRScanModal({
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const readerId = useRef(`qr-reader-${Math.random().toString(36).slice(2)}`).current;
 
-  const tierLabel = expectedCode.replace("LFR-REDEEM-", "");
   const tierColors: Record<string, string> = {
     SILVER: "#9ca3af",
     GOLD: "#f59e0b",
@@ -865,11 +797,7 @@ function QRScanModal({
           { fps: 10, qrbox: 220 },
           (decodedText) => {
             stopCamera();
-            if (decodedText === expectedCode) {
-              onSuccess();
-            } else {
-              toast.error(`Wrong QR code. Ask admin for the ${tierLabel} tier code.`);
-            }
+            onSuccess(decodedText);
           },
           () => {
             // per-frame miss — expected, ignore
