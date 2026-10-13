@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { WHATSAPP_NUMBER } from "@/lib/demo-data";
-import { useStore } from "@/lib/store";
+import { useEvents } from "@/lib/api/events";
 import { formatDistanceKm } from "@/lib/utils";
 import community from "@/assets/community.jpg";
 import lfr from "@/assets/lfr-logo-clean.png";
@@ -10,11 +10,11 @@ import {
 } from "lucide-react";
 
 export default function Home() {
-  const { state } = useStore();
+  const { events } = useEvents();
   const waContact = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("Hi Waven — I'd like to get in touch.")}`;
 
   const todayStr = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local time
-  const upcoming = state.events
+  const upcoming = events
     .filter((e) => e.date >= todayStr)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 4);
