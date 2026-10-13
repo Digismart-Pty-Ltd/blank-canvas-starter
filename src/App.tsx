@@ -16,6 +16,7 @@ const RunningClub = lazy(() => import("@/pages/RunningClub"));
 const Membership = lazy(() => import("@/pages/Membership"));
 const Join = lazy(() => import("@/pages/Join"));
 const Login = lazy(() => import("@/pages/Login"));
+const ResetPassword = lazy(() => import("@/pages/ResetPassword"));
 const Admin = lazy(() => import("@/pages/Admin"));
 const NotificationsPage = lazy(() => import("@/pages/Notifications"));
 const Gallery = lazy(() => import("@/pages/Gallery"));
@@ -165,6 +166,7 @@ export default function App() {
                   <Route path="/membership" element={<Membership />} />
                   <Route path="/join" element={<Join />} />
                   <Route path="/login" element={<Login />} />
+                  <Route path="/reset-password" element={<ResetPassword />} />
                   <Route path="/notifications" element={<NotificationsPage />} />
                   <Route path="/gallery" element={<Gallery />} />
                   <Route path="/privacy" element={<Privacy />} />
