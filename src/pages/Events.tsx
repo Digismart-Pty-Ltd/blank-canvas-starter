@@ -274,23 +274,18 @@ useEffect(() => {
 
   
 
-  // Keep the name field in sync once we resolve who the user actually is
-  // (covers the case where currentUser wasn't known yet on first render).
+  // Pre-fill the booking form ONCE each time the dialog opens. Whatever the
+  // member types afterwards is never overwritten (no re-run on profile refresh).
   useEffect(() => {
-    if (currentUser?.name && !name) setName(currentUser.name);
+    if (!signupOpen) return;
+    setName(authProfile?.name || currentUser?.name || "");
+    setContact(authProfile?.contact?.trim() ?? "");
+    const { name: eName, number: eNumber } = splitEmergency(authProfile?.emergency);
+    setEmergencyName(eName);
+    setEmergencyNumber(eNumber);
+    setProfileLoaded(!!authProfile);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.name]);
-
-useEffect(() => {
-  if (!authProfile) return;
-  if (authProfile.contact) setContact(authProfile.contact);
-  if (authProfile.emergency) {
-    const parts = authProfile.emergency.split(" — ");
-    setEmergencyName(parts[0]?.trim() ?? "");
-    setEmergencyNumber(parts[1]?.trim() ?? "");
-  }
-  setProfileLoaded(true);
-}, [authProfile]);
+  }, [signupOpen]);
 
   const [signingUp, setSigningUp] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
@@ -669,7 +664,6 @@ useEffect(() => {
                 }}
                 type="tel"
                 required
-                locked={!!effectiveMember && !!contact}
               />
               {contactError && <p className="mt-1 text-[11px] text-destructive">{contactError}</p>}
             </div>
@@ -679,7 +673,6 @@ useEffect(() => {
               value={emergencyName}
               onChange={setEmergencyName}
               required
-              locked={!!effectiveMember && !!emergencyName}
             />
 
             <div>
@@ -692,7 +685,6 @@ useEffect(() => {
                 }}
                 type="tel"
                 required
-                locked={!!effectiveMember && !!emergencyNumber}
               />
               {emergencyNumberError && (
                 <p className="mt-1 text-[11px] text-destructive">{emergencyNumberError}</p>
@@ -766,6 +758,25 @@ function Info({ icon: Icon, label, value }: { icon: any; label: string; value: s
       <div className="mt-1 text-foreground">{value}</div>
     </div>
   );
+}
+
+// Emergency contact is stored as one text value: "<name> — <number>"
+// (space, em dash, space), the same format Join and Membership use.
+function splitEmergency(raw: string | null | undefined): { name: string; number: string } {
+  const value = (raw ?? "").trim();
+  if (!value) return { name: "", number: "" };
+  const idx = value.indexOf(" — ");
+  let name = idx >= 0 ? value.slice(0, idx).trim() : value;
+  let number = idx >= 0 ? value.slice(idx + 3).trim() : "";
+  const looksLikePhone = (v: string) => /^[+\d\s()-]+$/.test(v) && v.replace(/\D/g, "").length >= 7;
+  if (idx < 0 && looksLikePhone(name)) {
+    number = name;
+    name = "";
+  }
+  // Drop meaningless fragments such as a lone "0".
+  if (!/[a-zA-Z]/.test(name)) name = "";
+  if (number && !looksLikePhone(number)) number = "";
+  return { name, number };
 }
 
 function Field({
