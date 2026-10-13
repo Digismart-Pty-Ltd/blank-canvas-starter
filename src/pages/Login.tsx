@@ -1,13 +1,9 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { loginUser } from "@/services/authService";
+import { loginUser, sendPasswordReset } from "@/services/authService";
 import { useAuth } from "@/context/AuthContext";
 import { LogIn, Eye, EyeOff, Mail, ArrowLeft, Loader2 } from "lucide-react";
-import { getAuth, sendPasswordResetEmail } from "firebase/auth";
-import { savePushToken } from "@/lib/notificationService";
-import { requestPushToken } from "@/lib/firebase";
-import { auth } from "@/lib/firebase";
 
 type View = "login" | "reset" | "reset-sent";
 
@@ -56,40 +52,23 @@ export default function Login() {
       await loginUser(email, password);
       setLoginPrompted(true);
 
-      // Push notifications are optional and must not make a successful login
-      // look like it failed when iOS/Android blocks the service worker or token.
-      try {
-        const permission = permissionPromise
-          ? await permissionPromise
-          : typeof Notification !== "undefined"
-            ? Notification.permission
-            : "default";
-
-        if (permission === "granted" && auth.currentUser) {
-          const token = await requestPushToken();
-          if (token) {
-            await savePushToken(auth.currentUser.uid, token);
-          }
-        }
-      } catch (pushError) {
-        console.warn("Push notification setup skipped after successful login:", pushError);
+      // Push permission prompt is kept; saving push tokens is paused during migration.
+      if (permissionPromise) {
+        permissionPromise.catch(() => {});
       }
     } catch (err: any) {
       setSubmitting(false);
-      switch (err.code) {
-        case "auth/user-not-found":
-        case "auth/wrong-password":
-        case "auth/invalid-credential":
-          toast.error("Invalid email or password.");
-          break;
-        case "auth/invalid-email":
-          toast.error("Please enter a valid email.");
-          break;
-        case "auth/too-many-requests":
-          toast.error("Too many attempts. Please wait a moment and try again.");
-          break;
-        default:
-          toast.error("Login failed. Please try again.");
+      const msg = String(err?.message ?? "").toLowerCase();
+      if (err?.code === "invalid_credentials" || msg.includes("invalid login credentials")) {
+        toast.error("Invalid email or password.");
+      } else if (err?.code === "email_not_confirmed" || msg.includes("email not confirmed")) {
+        toast.error("Please confirm your email first. Check your inbox.");
+      } else if (err?.code === "email_address_invalid" || msg.includes("invalid email")) {
+        toast.error("Please enter a valid email.");
+      } else if (err?.status === 429 || msg.includes("rate limit")) {
+        toast.error("Too many attempts. Please wait a moment and try again.");
+      } else {
+        toast.error("Login failed. Please try again.");
       }
     }
   }
@@ -99,20 +78,14 @@ export default function Login() {
     if (!resetEmail.trim()) return toast.error("Please enter your email address.");
     setSendingReset(true);
     try {
-      const auth = getAuth();
-      await sendPasswordResetEmail(auth, resetEmail.trim());
+      await sendPasswordReset(resetEmail.trim());
       setView("reset-sent");
     } catch (err: any) {
-      switch (err.code) {
-        case "auth/user-not-found":
-          // Don't reveal whether the email exists — just show the success screen
-          setView("reset-sent");
-          break;
-        case "auth/invalid-email":
-          toast.error("Please enter a valid email address.");
-          break;
-        default:
-          toast.error("Could not send reset email. Please try again.");
+      const msg = String(err?.message ?? "").toLowerCase();
+      if (err?.code === "email_address_invalid" || msg.includes("invalid email")) {
+        toast.error("Please enter a valid email address.");
+      } else {
+        toast.error("Could not send reset email. Please try again.");
       }
     } finally {
       setSendingReset(false);
