@@ -45,7 +45,7 @@ const waiverPoints = [
 
 export default function Join() {
   const nav = useNavigate();
-  const { user, isMember } = useAuth();
+  const { user, isMember, refreshProfile } = useAuth();
 
   const isOpenRunner = user && !isMember;
 
@@ -107,12 +107,14 @@ export default function Join() {
 
         if (isOpenRunner) {
           await upgradeToMember({
+            name,
             idNumber: id,
             contact,
             emergency: `${emergencyName} — ${emergencyNumber}`,
           });
+          await refreshProfile();
         } else {
-          await registerMember({
+          const res = await registerMember({
             name,
             email,
             password,
@@ -120,6 +122,11 @@ export default function Join() {
             contact,
             emergency: `${emergencyName} — ${emergencyNumber}`,
           });
+          if (!res.session) {
+            toast.success("Check your email to confirm your account, then log in.");
+            nav("/login");
+            return;
+          }
         }
 
         toast.success(`Welcome, ${name.split(" ")[0]}! Your membership account has been created.`);
@@ -130,18 +137,15 @@ export default function Join() {
       console.error(error);
       setSubmitting(false);
 
-      switch (error.code) {
-        case "auth/email-already-in-use":
-          toast.error("An account already exists with this email.");
-          break;
-        case "auth/weak-password":
-          toast.error("Password should be at least 6 characters.");
-          break;
-        case "auth/invalid-email":
-          toast.error("Please enter a valid email address.");
-          break;
-        default:
-          toast.error("Registration failed. Please try again.");
+      const msg = String(error?.message ?? "").toLowerCase();
+      if (error?.code === "user_already_exists" || msg.includes("already registered")) {
+        toast.error("An account already exists with this email.");
+      } else if (error?.code === "weak_password" || msg.includes("password")) {
+        toast.error("Password should be at least 6 characters.");
+      } else if (error?.code === "email_address_invalid" || msg.includes("invalid email")) {
+        toast.error("Please enter a valid email address.");
+      } else {
+        toast.error("Registration failed. Please try again.");
       }
     }
   }
