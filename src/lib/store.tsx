@@ -322,7 +322,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return false;
     },
 
-    loginAdmin: () => {
+    loginAdmin: async () => {
       localStorage.setItem(ADMIN_KEY, "1");
       mutate((s) => ({ ...s, currentUserKind: "admin", currentUserId: null }));
     },
