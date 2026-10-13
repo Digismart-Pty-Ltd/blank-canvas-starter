@@ -1,5 +1,4 @@
 import { Link, useSearchParams } from "react-router-dom";
-import { useStore } from "@/lib/store";
 import { formatDistanceKm } from "@/lib/utils";
 import React, { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -22,29 +21,27 @@ import {
 } from "lucide-react";
 import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext } from "@/components/ui/carousel";
 import type { CarouselApi } from "@/components/ui/carousel";
-import type { Event } from "@/lib/demo-data";
-import { subscribeToEvents } from "@/lib/eventService";
-import {
-  collection,
-  addDoc,
-  deleteDoc,
-  doc,
-  getDoc,
-  updateDoc,
-  query,
-  where,
-  getDocs,
-  serverTimestamp,
-  onSnapshot,
-  limit,
-} from "firebase/firestore";
 import { Html5Qrcode } from "html5-qrcode";
-import { db } from "@/lib/firebase";
-import { subscribeToSponsors, type Sponsor } from "@/lib/sponsorService";
 import { useAuth } from "@/context/AuthContext";
+import { useEvents, type AppEvent } from "@/lib/api/events";
+import { useSponsors, type PublicSponsor } from "@/lib/api/sponsors";
+import { useImageUrl } from "@/lib/api/images";
+import {
+  useMyRegistrations,
+  useRegistrationCounts,
+  registerForEvent,
+  cancelRegistration,
+  checkIn as checkInRpc,
+  CHECK_IN_MESSAGES,
+  type MyRegistration,
+} from "@/lib/api/registrations";
+import { serverMessage, errorCode } from "@/lib/api/errors";
 
 export default function Events() {
-  const { state, setEvents } = useStore();
+  const { events } = useEvents();
+  const { user } = useAuth();
+  const { regs: myRegs, reload: reloadMyRegs } = useMyRegistrations(user?.uid);
+  const { counts, reload: reloadCounts } = useRegistrationCounts();
   const [searchParams] = useSearchParams();
   const checkinEventId = searchParams.get("checkin");
   const scrollRef = useRef<Record<string, HTMLDivElement | null>>({});
@@ -61,7 +58,7 @@ export default function Events() {
     if (el) {
       setTimeout(() => el.scrollIntoView({ behavior: "smooth", inline: "center" }), 300);
     }
-  }, [checkinEventId, state.events]);
+  }, [checkinEventId, events]);
 
   // Events are already kept in sync by the global StoreProvider subscription.
   // No local listener here to avoid duplicate Firestore listen channels.
@@ -82,7 +79,7 @@ export default function Events() {
   }, []);
 
   const todayStr = new Date().toLocaleDateString("en-CA");
-  const upcomingEvents = state.events.filter((e) => e.date >= todayStr);
+  const upcomingEvents = events.filter((e) => e.date >= todayStr);
 
   
 
@@ -137,7 +134,15 @@ export default function Events() {
       </div>
       <div className="mx-auto w-full max-w-xl">
         {isVisible ? (
-          <EventCard e={e} />
+          <EventCard
+            e={e}
+            myReg={myRegs.find((r) => r.eventId === e.id) ?? null}
+            count={counts[e.id] ?? 0}
+            onChanged={() => {
+              reloadMyRegs();
+              reloadCounts();
+            }}
+          />
         ) : (
           <div className="h-96 rounded-3xl bg-secondary/40 animate-pulse" />
         )}
@@ -163,23 +168,8 @@ function isValidPhone(value: string) {
   return /^[+]?[\d\s\-().]{7,15}$/.test(value.trim());
 }
 function SponsorsBanner() {
-  const [sponsors, setSponsors] = useState<Sponsor[]>([]);
+  const sponsors = useSponsors();
   const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const unsub = subscribeToSponsors((s) => {
-      if (isMounted) {
-        setSponsors(s);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-      unsub?.();
-    };
-  }, []);
 
   useEffect(() => {
     if (!carouselApi) return;
@@ -214,18 +204,13 @@ function SponsorsBanner() {
                 className="basis-auto min-w-[160px] sm:min-w-[180px] md:min-w-[220px] max-w-[220px] rounded-3xl"
               >
                 <a
-                  href={s.websiteUrl}
+                  href={s.websiteUrl ?? undefined}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="group flex h-28 w-full items-center justify-center overflow-hidden rounded-3xl border border-border bg-background p-4 transition duration-300 hover:shadow-lg"
                   title={s.name}
                 >
-                  <img
-                    src={s.logoUrl}
-                    alt={s.name}
-                    loading="lazy"
-                    className="max-h-full max-w-full object-contain"
-                  />
+                  <SponsorLogo sponsor={s} />
                 </a>
               </CarouselItem>
             ))}
@@ -236,66 +221,37 @@ function SponsorsBanner() {
     </section>
   );
 }
-const EventCard = React.memo(function EventCard({ e }: { e: Event }) {
-  const { currentMember, currentOpen, state } = useStore();
-  const { user, loading: authLoading, profile: authProfile } = useAuth();
+function SponsorLogo({ sponsor }: { sponsor: PublicSponsor }) {
+  const src = useImageUrl(sponsor.logoUrl, "sponsor-logos");
+  if (!src) return <span className="text-sm text-muted-foreground">{sponsor.name}</span>;
+  return (
+    <img src={src} alt={sponsor.name} loading="lazy" className="max-h-full max-w-full object-contain" />
+  );
+}
+
+const EventCard = React.memo(function EventCard({
+  e,
+  myReg,
+  count,
+  onChanged,
+}: {
+  e: AppEvent;
+  myReg: MyRegistration | null;
+  count: number;
+  onChanged: () => void;
+}) {
+  const { user, loading: authLoading, profile: authProfile, isMember } = useAuth();
   const [open, setOpen] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
   const [attendOpen, setAttendOpen] = useState(false);
+  const imageSrc = useImageUrl(e.image, "event-images");
 
-  const [attendees, setAttendees] = useState<
-    { id: string; name: string; checkedInAt?: string; openRunner?: boolean; tier?: string }[]
-  >([]);
-  const [myReg, setMyReg] = useState<{ id: string; checkedInAt?: string } | null>(null);
-
-  // Resolve the logged-in user the same way SiteHeader does: prefer the
-  // store's currentMember, but fall back to matching the Firebase auth
-  // user's email against known members. This keeps this component in sync
-  // with the header instead of flashing "not logged in" whenever
-  // currentMember hasn't been hydrated into the store yet (e.g. on refresh).
-  const authEmail = user?.email ?? undefined;
-  const authMember = authEmail
-    ? state.members.find((m) => m.email.toLowerCase() === authEmail.toLowerCase())
+  const effectiveMember = isMember ? authProfile : null;
+  const currentUser = user
+    ? { id: user.uid, name: authProfile?.name || user.displayName || "" }
     : null;
-  const effectiveMember = currentMember ?? authMember;
-
-  const currentUser = effectiveMember ?? currentOpen;
-  const isLoggedIn = Boolean(user || currentUser);
-useEffect(() => {
-  if (!e.id) return;
-  let isMounted = true;
-
-  const q = query(
-    collection(db, "eventRegistrations"),
-    where("eventId", "==", e.id),
-    limit(200) // ✅ ADD LIMIT - no need to load all registrations
-  );
-
-  const unsub = onSnapshot(
-    q,
-    (snap) => {
-      if (!isMounted) return; // ✅ Don't update if unmounting
-      
-      const regs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-      setAttendees(regs);
-      
-      if (currentUser?.id) {
-        const mine = regs.find((r: any) => r.userId === currentUser.id) ?? null;
-        setMyReg(mine);
-      }
-    },
-    (err) => {
-      if (!isMounted) return;
-      console.error("Attendees subscription error:", err);
-    }
-  );
-
-  return () => {
-    isMounted = false;
-    unsub();
-  };
-}, [e.id, currentUser?.id]);
+  const isLoggedIn = Boolean(user);
 
   const [name, setName] = useState(currentUser?.name ?? "");
   const [contact, setContact] = useState("");
@@ -382,50 +338,54 @@ useEffect(() => {
     if (!emergencyNumber.trim())
       return toast.error("Please enter your emergency contact's number.");
 
+    if (!user) return;
     setSigningUp(true);
     try {
       if (myReg) {
-        toast.error("You're already signed up for this event.");
+        toast.error("You're already registered");
         return;
       }
 
-      await addDoc(collection(db, "eventRegistrations"), {
+      await registerForEvent({
         eventId: e.id,
-        userId: currentUser?.id ?? null,
+        userId: user.uid,
         name,
         contact,
         emergency: `${emergencyName} — ${emergencyNumber}`,
-        openRunner: !effectiveMember,
-        tier: (effectiveMember as any)?.tier ?? null,
-        checkedInAt: null,
-        reminderSent: false, // ← add this
-        createdAt: serverTimestamp(),
       });
 
       toast.success(`You're in — ${e.title}`);
       setSignupOpen(false);
+      onChanged();
     } catch (err) {
       console.error(err);
-      toast.error("Sign-up failed. Please try again.");
+      const code = errorCode(err);
+      if (code === "23505") {
+        toast.error("You're already registered");
+        onChanged();
+      } else if (code === "42501" || String((err as any)?.message ?? "").includes("row-level security")) {
+        toast.error("Members only — Join");
+      } else {
+        toast.error("Sign-up failed. Please try again.");
+      }
     } finally {
       setSigningUp(false);
     }
   }
 
-  async function doCheckIn() {
+  async function doCheckIn(code: string) {
     if (!myReg) {
       toast.error("You're not signed up for this event.");
       return;
     }
     setCheckingIn(true);
     try {
-      await updateDoc(doc(db, "eventRegistrations", myReg.id), {
-        checkedInAt: new Date().toISOString(),
-      });
+      await checkInRpc(myReg.id, code);
       toast.success("Checked in! Event counted.");
+      onChanged();
     } catch (err) {
       console.error(err);
-      toast.error("Check-in failed. Please try again.");
+      toast.error(serverMessage(err, CHECK_IN_MESSAGES) ?? "Check-in failed. Please try again.");
     } finally {
       setCheckingIn(false);
     }
@@ -441,8 +401,13 @@ useEffect(() => {
 
     setCancelling(true);
     try {
-      await deleteDoc(doc(db, "eventRegistrations", myReg.id));
-      toast("Booking cancelled.");
+      const removed = await cancelRegistration(myReg.id, user!.uid);
+      if (removed) {
+        toast("Booking cancelled.");
+      } else {
+        toast.error("You've already checked in for this event, so this booking can't be cancelled.");
+      }
+      onChanged();
     } catch (err) {
       console.error(err);
       toast.error("Could not cancel. Please try again.");
@@ -454,11 +419,11 @@ useEffect(() => {
   return (
     <article className="group relative overflow-hidden rounded-3xl border border-border bg-card">
       <div
-        className={`relative overflow-hidden ${(e as any).imageOrientation === "portrait" ? "aspect-[3/4]" : "aspect-[16/9]"}`}
+        className={`relative overflow-hidden ${e.imageOrientation === "portrait" ? "aspect-[3/4]" : "aspect-[16/9]"}`}
       >
-        {e.image ? (
+        {imageSrc ? (
           <img
-            src={e.image}
+            src={imageSrc}
             alt={e.title}
             loading="lazy"
             decoding="async" 
@@ -483,7 +448,7 @@ useEffect(() => {
       <div className="p-6">
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.3em] text-primary">
           <span>
-            {(e as any).distanceDisplay ?? formatDistanceKm(e.distanceKm)}
+            {e.distanceDisplay ?? formatDistanceKm(e.distanceKm)}
           </span>
           <span>·</span>
           <span>{new Date(e.date).toDateString()}</span>
@@ -671,7 +636,7 @@ useEffect(() => {
             onClick={() => setAttendOpen(true)}
             className="inline-flex items-center gap-2 rounded-full border border-border px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] hover:border-primary active:scale-95 transition-all"
           >
-            <Users size={14} /> Attendees ({attendees.length})
+            <Users size={14} /> Attendees ({count})
           </button>
         </div>
       </div>
@@ -767,46 +732,30 @@ useEffect(() => {
         <Modal onClose={() => setAttendOpen(false)}>
           <div className="display text-2xl">Who's coming</div>
           <p className="text-sm text-muted-foreground mt-1">{e.title}</p>
-          {attendees.length === 0 ? (
+          {count === 0 ? (
             <p className="mt-6 text-sm text-muted-foreground">
               No one signed up yet. Be the first.
             </p>
           ) : (
-            <ul className="mt-5 divide-y divide-border max-h-72 overflow-y-auto">
-              {attendees.map((a) => (
-                <li key={a.id} className="flex items-center justify-between py-3 text-sm">
-                  <span className="flex items-center gap-2">
-                    {a.name}
-                    {a.checkedInAt && (
-                      <span className="text-[10px] uppercase tracking-widest text-primary">
-                        · in
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className={`text-[10px] uppercase tracking-[0.2em] ${a.openRunner ? "text-muted-foreground" : "text-primary"}`}
-                  >
-                    {a.openRunner ? "Open Runner" : (a.tier ?? "Member")}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <p className="mt-6 text-sm text-muted-foreground">
+              {count} {count === 1 ? "person has" : "people have"} signed up.
+            </p>
           )}
         </Modal>
       )}
       {/* ── Check-in QR scanner modal ── */}
       {scannerOpen && (
         <CheckInScanModal
-          onSuccess={async () => {
+          onSuccess={async (code) => {
             setScannerOpen(false);
-            await doCheckIn();
+            await doCheckIn(code);
           }}
           onClose={() => setScannerOpen(false)}
         />
       )}
     </article>
   );
-}, (prevProps, nextProps) => prevProps.e.id === nextProps.e.id);
+});
 
 function Info({ icon: Icon, label, value }: { icon: any; label: string; value: string }) {
   return (
@@ -886,7 +835,7 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose: () =
   );
 }
 
-function CheckInScanModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
+function CheckInScanModal({ onSuccess, onClose }: { onSuccess: (code: string) => void; onClose: () => void }) {
   const [error, setError] = useState("");
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const readerId = useRef(`checkin-reader-${Math.random().toString(36).slice(2)}`).current;
@@ -941,12 +890,7 @@ if (!isMounted) {
         (decodedText) => {
           if (!isMounted) return; // ✅ Don't process if unmounting
           stopCamera();
-          if (decodedText === "LFR-CHECKIN") {
-            onSuccess();
-          } else {
-            toast.error("Wrong QR code. Ask the organiser for the check-in code.");
-            onClose();
-          }
+          onSuccess(decodedText);
         },
         () => {
           // per-frame miss — expected, ignore
