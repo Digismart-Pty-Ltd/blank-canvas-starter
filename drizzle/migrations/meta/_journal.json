@@ -8,6 +8,13 @@
       "when": 1791884281720,
       "tag": "0000_waven_harper_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791884953125,
+      "tag": "0001_lock_down_permissions",
+      "breakpoints": true
     }
   ]
 }
