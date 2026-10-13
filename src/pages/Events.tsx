@@ -238,7 +238,7 @@ function SponsorsBanner() {
 }
 const EventCard = React.memo(function EventCard({ e }: { e: Event }) {
   const { currentMember, currentOpen, state } = useStore();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, profile: authProfile } = useAuth();
   const [open, setOpen] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
@@ -326,33 +326,15 @@ useEffect(() => {
   }, [currentUser?.name]);
 
 useEffect(() => {
-  const memberId = effectiveMember?.id;
-  if (!memberId) return;
-
-  let isMounted = true;
-
-  getDoc(doc(db, "users", memberId))
-    .then((snap) => {
-      if (!isMounted || !snap.exists()) return; // ✅ Check if still mounted
-      
-      const data = snap.data() as any;
-      if (data.contact) setContact(data.contact);
-      if (data.emergency) {
-        const parts = data.emergency.split(" — ");
-        setEmergencyName(parts[0]?.trim() ?? "");
-        setEmergencyNumber(parts[1]?.trim() ?? "");
-      }
-      setProfileLoaded(true);
-    })
-    .catch((err) => {
-      if (!isMounted) return;
-      console.error("Profile fetch error:", err);
-    });
-
-  return () => {
-    isMounted = false;
-  };
-}, [effectiveMember?.id]);
+  if (!authProfile) return;
+  if (authProfile.contact) setContact(authProfile.contact);
+  if (authProfile.emergency) {
+    const parts = authProfile.emergency.split(" — ");
+    setEmergencyName(parts[0]?.trim() ?? "");
+    setEmergencyNumber(parts[1]?.trim() ?? "");
+  }
+  setProfileLoaded(true);
+}, [authProfile]);
 
   const [signingUp, setSigningUp] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);

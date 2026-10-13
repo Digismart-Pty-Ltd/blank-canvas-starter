@@ -21,9 +21,6 @@ import type { Tier } from "@/lib/demo-data";
 import { useEffect, useState, useRef } from "react";
 import {
   doc,
-  getDoc,
-  getDocs,
-  updateDoc,
   addDoc,
   deleteDoc,
   collection,
