@@ -57,10 +57,9 @@ export async function markNotificationRead(
   });
 }
 
-export async function savePushToken(userId: string, token: string) {
-  await updateDoc(doc(db, "users", userId), {
-    fcmTokens: arrayUnion(token),
-  });
+// Saving push tokens is paused during the Firebase → Lovable Cloud migration.
+export async function savePushToken(_userId: string, _token: string) {
+  return;
 }
 
 export async function hideNotificationForUser(id: string, uid: string) {

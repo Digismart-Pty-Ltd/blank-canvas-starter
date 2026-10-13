@@ -2,8 +2,6 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Bell, LogOut, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import wh from "@/assets/wh-logo.jpeg";
-import { doc, getDoc, onSnapshot as fsOnSnapshot } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import { logoutUser } from "@/services/authService";
@@ -22,58 +20,30 @@ const navLinks = [
 ];
 
 export function SiteHeader() {
-  const { currentMember, currentOpen, logout, state } = useStore();
-  const { user, loading } = useAuth();
+  const { logout } = useStore();
+  const { user, loading, profile, avatarUrl, role: authRole } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  const [headerAvatar, setHeaderAvatar] = useState<string | null>(null);
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
-  const [liveTier, setLiveTier] = useState<string | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
 
-  const authEmail = user?.email ?? undefined;
-  const authMember = authEmail
-    ? state.members.find((m) => m.email.toLowerCase() === authEmail.toLowerCase())
-    : null;
-  const effectiveMember = currentMember ?? authMember;
-  const loggedIn = Boolean(user || effectiveMember || currentOpen);
-  const name =
-    effectiveMember?.name ?? currentOpen?.name ?? user?.displayName ?? user?.email?.split("@")[0];
+  const loggedIn = Boolean(user);
+  const name = profile?.name?.trim() || user?.displayName || user?.email?.split("@")[0];
   const initials = (name ?? "Guest")
     .split(" ")
     .map((s) => s[0])
     .slice(0, 2)
     .join("");
 
-  // Current user's UID for read tracking
-  const uid = user?.uid ?? effectiveMember?.id ?? currentOpen?.id ?? null;
-
-  useEffect(() => {
-    if (!uid) {
-      setHeaderAvatar(null);
-      return;
-    }
-    getDoc(doc(db, "users", uid)).then((snap) => {
-      if (snap.exists()) setHeaderAvatar(snap.data().avatarUrl ?? null);
-    });
-  }, [uid]);
-
-  // Live tier subscription — keeps minTier filtering in sync with NotificationsPage
-  useEffect(() => {
-    if (!uid || !effectiveMember) {
-      setLiveTier(null);
-      return;
-    }
-    const unsub = fsOnSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) setLiveTier((snap.data() as any).tier ?? null);
-    });
-    return () => unsub();
-  }, [uid, effectiveMember]);
+  // Current user's ID for read tracking
+  const uid = user?.uid ?? null;
+  const headerAvatar = avatarUrl;
+  const liveTier = authRole === "member" ? (profile?.tier ?? null) : null;
 
   // Role for audience filtering
-  const role = effectiveMember ? "members" : currentOpen ? "open" : null;
+  const role = authRole === "member" ? "members" : authRole === "open" ? "open" : null;
 
   useEffect(() => {
     return subscribeToNotifications((all) => {

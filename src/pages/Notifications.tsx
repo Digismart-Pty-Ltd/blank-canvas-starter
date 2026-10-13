@@ -1,40 +1,30 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Bell, X, BellRing } from "lucide-react";
-import { useStore } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
 import {
   subscribeToNotifications,
   markNotificationRead,
-  savePushToken,
   hideNotificationForUser,
   type Notification,
 } from "@/lib/notificationService";
-import { doc, onSnapshot as fsOnSnapshot } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { requestPushToken } from "@/lib/firebase";
 
 const tierRank: Record<string, number> = { Pink: 0, Silver: 1, Gold: 2, Platinum: 3 };
 
 export default function NotificationsPage() {
-  const { currentMember, currentOpen, state } = useStore();
-  const { user } = useAuth();
+  const { user, profile, role: authRole, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const fromLogin = (location.state as any)?.fromLogin === true;
 
   const [allNotifs, setAllNotifs] = useState<Notification[]>([]);
   const [notifsLoaded, setNotifsLoaded] = useState(false);
-  const [liveTier, setLiveTier] = useState<string | null>(null);
-  const [tierLoaded, setTierLoaded] = useState(false);
 
-  const authEmail = user?.email ?? undefined;
-  const authMember = authEmail
-    ? state.members.find((m) => m.email.toLowerCase() === authEmail.toLowerCase())
-    : null;
-  const effectiveMember = currentMember ?? authMember;
-  const uid = user?.uid ?? effectiveMember?.id ?? currentOpen?.id ?? null;
-  const role = effectiveMember ? "members" : currentOpen ? "open" : null;
+  const uid = user?.uid ?? null;
+  const role = authRole === "member" ? "members" : authRole === "open" ? "open" : null;
+  const liveTier = authRole === "member" ? (profile?.tier ?? null) : null;
+  const tierLoaded = !authLoading;
   const [pushStatus, setPushStatus] = useState<
     "idle" | "asking" | "granted" | "denied" | "unsupported"
   >("idle");
@@ -69,9 +59,9 @@ export default function NotificationsPage() {
   async function handleEnablePush() {
     if (!uid) return;
     setPushStatus("asking");
+    // Token saving is paused during migration; only the permission prompt runs.
     const token = await requestPushToken();
     if (token) {
-      await savePushToken(uid, token);
       setPushStatus("granted");
     } else {
       setPushStatus(Notification.permission === "denied" ? "denied" : "idle");
@@ -81,19 +71,6 @@ export default function NotificationsPage() {
   useEffect(() => {
     document.title = "Notifications · Waven Harper Fitness";
   }, []);
-
-  // Load live tier from Firestore
-  useEffect(() => {
-    if (!uid || !effectiveMember) {
-      setTierLoaded(true); // not a member, no tier needed
-      return;
-    }
-    const unsub = fsOnSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) setLiveTier((snap.data() as any).tier ?? null);
-      setTierLoaded(true);
-    });
-    return () => unsub();
-  }, [uid]);
 
   // Subscribe to notifications
   useEffect(() => {
