@@ -366,7 +366,7 @@ async function handleRemoveRedemption(rewardId: string) {
           id: uid ?? `member:${(authEmail ?? "unknown").toLowerCase()}`,
           name: user.displayName?.trim() || (authEmail ? authEmail.split("@")[0] : "Member"),
           email: authEmail ?? "",
-          joined: new Date().toISOString().slice(0, 10),
+          joined: profile?.joined ?? new Date().toISOString().slice(0, 10),
           races: 0,
           tier: "Pink" as Tier,
           rewardsPending: 0,
