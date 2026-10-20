@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_audit_log: {
+        Row: {
+          action: string
+          actor_id: string | null
+          actor_name: string | null
+          at: string
+          changed_columns: string[] | null
+          id: number
+          row_id: string | null
+          table_name: string
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          actor_name?: string | null
+          at?: string
+          changed_columns?: string[] | null
+          id?: never
+          row_id?: string | null
+          table_name: string
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          actor_name?: string | null
+          at?: string
+          changed_columns?: string[] | null
+          id?: never
+          row_id?: string | null
+          table_name?: string
+        }
+        Relationships: []
+      }
       advertisements: {
         Row: {
           activation_date: string | null

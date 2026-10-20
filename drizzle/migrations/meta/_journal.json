@@ -15,6 +15,13 @@
       "when": 1791884953125,
       "tag": "0001_lock_down_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792536414724,
+      "tag": "0002_admin_audit_log_and_function_permissions",
+      "breakpoints": true
     }
   ]
 }
