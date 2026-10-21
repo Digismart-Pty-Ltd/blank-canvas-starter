@@ -1,17 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "node:test";
+import { strict as assert } from "node:assert";
 import { adminAccess } from "./admin-access";
 
 describe("admin entry access", () => {
   test("never shows the dashboard while roles load", () => {
-    expect(adminAccess(true, "user-id", true)).toBe("loading");
+    assert.equal(adminAccess(true, "user-id", true), "loading");
   });
   test("a signed-out visitor must log in even with a stale admin value", () => {
-    expect(adminAccess(false, null, true)).toBe("login");
+    assert.equal(adminAccess(false, null, true), "login");
   });
   test("a signed-in non-admin is denied", () => {
-    expect(adminAccess(false, "user-id", false)).toBe("denied");
+    assert.equal(adminAccess(false, "user-id", false), "denied");
   });
   test("a loaded, signed-in admin may enter", () => {
-    expect(adminAccess(false, "user-id", true)).toBe("admin");
+    assert.equal(adminAccess(false, "user-id", true), "admin");
   });
 });
