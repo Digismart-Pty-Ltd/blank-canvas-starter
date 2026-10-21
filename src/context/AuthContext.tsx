@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
@@ -21,6 +21,7 @@ interface AuthContextType {
   role: Role;
   loading: boolean;
   isMember: boolean;
+  isAdmin: boolean;
   profile: Profile | null;
   stats: MemberStats | null;
   avatarUrl: string | null;
@@ -32,6 +33,7 @@ const AuthContext = createContext<AuthContextType>({
   role: null,
   loading: true,
   isMember: false,
+  isAdmin: false,
   profile: null,
   stats: null,
   avatarUrl: null,
@@ -51,6 +53,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [stats, setStats] = useState<MemberStats | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const authRevision = useRef(0);
 
   const loadProfile = useCallback(async (userId: string | null) => {
     if (!userId) {
@@ -76,20 +80,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      // Defer database calls out of the auth callback
+    let active = true;
+    async function synchronize(newSession: Session | null, revision: number) {
+      const { data, error } = newSession
+        ? await supabase.auth.getUser()
+        : { data: { user: null }, error: null };
+      if (!active || revision !== authRevision.current) return;
+      const validatedUser = error ? null : data.user;
+      setSession(validatedUser && newSession ? { ...newSession, user: validatedUser } : null);
+      if (!validatedUser) {
+        await loadProfile(null);
+        if (active && revision === authRevision.current) setLoading(false);
+        return;
+      }
+      const [, roles] = await Promise.all([
+        loadProfile(validatedUser.id),
+        supabase.from("user_roles").select("role")
+          .eq("user_id", validatedUser.id).eq("role", "admin"),
+      ]);
+      if (!active || revision !== authRevision.current) return;
+      setIsAdmin(!roles.error && (roles.data?.length ?? 0) > 0);
+      setLoading(false);
+    }
+
+    function queueSync(newSession: Session | null) {
+      const revision = ++authRevision.current;
+      setIsAdmin(false);
+      setLoading(true);
+      // Never await Cloud calls inside the auth callback.
       setTimeout(() => {
-        loadProfile(newSession?.user.id ?? null).finally(() => setLoading(false));
+        if (!active || revision !== authRevision.current) return;
+        void synchronize(newSession, revision).catch(() => {
+          if (!active || revision !== authRevision.current) return;
+          setIsAdmin(false);
+          setSession(null);
+          setLoading(false);
+        });
       }, 0);
+    }
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      queueSync(newSession);
     });
 
+    const initialRevision = authRevision.current;
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      loadProfile(data.session?.user.id ?? null).finally(() => setLoading(false));
+      if (active && initialRevision === authRevision.current) queueSync(data.session);
     });
 
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      active = false;
+      ++authRevision.current;
+      sub.subscription.unsubscribe();
+    };
   }, [loadProfile]);
 
   const refreshProfile = useCallback(async () => {
@@ -117,6 +160,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role,
         loading,
         isMember: role === "member",
+        isAdmin,
         profile,
         stats,
         avatarUrl,
