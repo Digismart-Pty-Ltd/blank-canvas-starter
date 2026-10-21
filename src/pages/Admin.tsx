@@ -446,7 +446,6 @@ function todayStr() {
 }
 
 function AdminCore({ logout }: { logout: () => Promise<void> }) {
-  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -497,7 +496,6 @@ function AdminCore({ logout }: { logout: () => Promise<void> }) {
           <button
             onClick={() => {
               logout();
-              navigate("/");
             }}
             className="flex w-full items-center justify-center gap-2 rounded-full border border-border/80 bg-background/70 px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground transition hover:border-primary hover:text-primary"
           >
@@ -561,7 +559,6 @@ function AdminCore({ logout }: { logout: () => Promise<void> }) {
             <button
               onClick={() => {
                 logout();
-                navigate("/");
               }}
               className="flex w-full items-center justify-center gap-2 rounded-full border border-border/80 bg-background/70 px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground transition hover:border-primary hover:text-primary"
             >
@@ -625,6 +622,7 @@ export default function Admin() {
 }
 
 function AdminGate() {
+  const navigate = useNavigate();
   const { user, isAdmin, loading } = useAuth();
   const { logout: clearLegacyUser } = useStore();
   const [firebaseReadyFor, setFirebaseReadyFor] = useState<string | null>(null);
@@ -656,7 +654,9 @@ function AdminGate() {
     const results = await Promise.allSettled([logoutUser(), firebaseSignOut(firebaseAuth)]);
     if (results.some((result) => result.status === "rejected")) {
       toast.error("Could not log out. Please try again.");
+      return;
     }
+    navigate("/");
   }
 
   if (access === "login") return <AdminLogin />;
