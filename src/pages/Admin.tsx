@@ -72,7 +72,12 @@ import {
 import { db } from "@/lib/firebase";
 import { ADMIN_EMAIL } from "@/lib/demo-data";
 import { formatDistanceKm } from "@/lib/utils";
-import { signInAsAdmin } from "@/services/authService";
+import { signInAsAdmin, loginUser, logoutUser, sendPasswordReset } from "@/services/authService";
+import { useAuth } from "@/context/AuthContext";
+import { auth as firebaseAuth } from "@/lib/firebase";
+import { signOut as firebaseSignOut } from "firebase/auth";
+import { adminAccess } from "@/lib/admin-access";
+import { Button } from "@/components/ui/button";
 import {
   subscribeToSponsors,
   createSponsor,
@@ -83,7 +88,6 @@ import {
 } from "@/lib/sponsorService";
 
 type Tab = "overview" | "events" | "members" | "rewards" | "orders" | "notifications" | "qrcodes" | "sponsors" | "adverts";
-const ADMIN_PASSWORD = "WavenHarper2026";
 const ITEMS_PER_PAGE = 25;
 
 const tierMeta: Record<Tier, { color: string }> = {
@@ -441,8 +445,7 @@ function todayStr() {
   return new Date().toLocaleDateString("en-CA");
 }
 
-function AdminCore() {
-  const { currentUser, loginAdmin, logout } = useStore();
+function AdminCore({ logout }: { logout: () => Promise<void> }) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -450,10 +453,6 @@ function AdminCore() {
   useEffect(() => {
     document.title = "Admin · Waven Harper Fitness";
   }, []);
-
-  if (currentUser?.kind !== "admin") {
-    return <AdminLogin onLogin={loginAdmin} />;
-  }
 
   const navItems = [
     { id: "overview", label: "Overview", icon: BarChart3 },
@@ -620,105 +619,167 @@ function AdminCore() {
 export default function Admin() {
   return (
     <ErrorBoundary>
-      <AdminCore />
+      <AdminGate />
     </ErrorBoundary>
   );
 }
 
-// ─── Password Login ───────────────────────────────────────────────────────────
+function AdminGate() {
+  const { user, isAdmin, loading } = useAuth();
+  const { logout: clearLegacyUser } = useStore();
+  const [firebaseReadyFor, setFirebaseReadyFor] = useState<string | null>(null);
+  const [firebaseError, setFirebaseError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const access = adminAccess(loading, user?.id ?? null, isAdmin);
 
-function AdminLogin({ onLogin }: { onLogin: () => void | Promise<void> }) {
-  const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [error, setError] = useState("");
-  const [shaking, setShaking] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    let active = true;
+    setFirebaseReadyFor(null);
+    setFirebaseError("");
+    if (access !== "admin" || !user?.id) return;
+    const userId = user.id;
+    // TEMPORARY: remove when all admin tabs are on Supabase
+    void signInAsAdmin().then(() => {
+      if (active) setFirebaseReadyFor(userId);
+    }).catch((err: unknown) => {
+      if (!active) return;
+      const code = (err as { code?: string })?.code;
+      setFirebaseError(code ? `Firebase login failed (${code}).` : "Could not connect to Firebase.");
+    });
+    return () => { active = false; };
+  }, [access, user?.id, retry]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
-      try {
-        await signInAsAdmin();
-        await onLogin();
-        toast.success("Welcome back, admin.");
-      } catch (err) {
-        console.error("Admin authentication failed:", err);
-        const code = (err as { code?: string })?.code;
-        setError(code ? `Firebase login failed (${code}).` : "Could not connect to Firebase.");
-      }
-    } else {
-      setError("Incorrect password. Try again.");
-      setShaking(true);
-      setPassword("");
-      setTimeout(() => setShaking(false), 500);
-      inputRef.current?.focus();
+  async function logout() {
+    setFirebaseReadyFor(null);
+    localStorage.removeItem("wh_admin_session");
+    clearLegacyUser();
+    const results = await Promise.allSettled([logoutUser(), firebaseSignOut(firebaseAuth)]);
+    if (results.some((result) => result.status === "rejected")) {
+      toast.error("Could not log out. Please try again.");
     }
   }
 
+  if (access === "login") return <AdminLogin />;
+  if (access === "denied") {
+    return (
+      <AdminGateFrame>
+        <p className="mt-4 text-sm text-muted-foreground">Not authorised. This area is for organisers only.</p>
+        <Button onClick={logout} className="mt-6 w-full rounded-full"><LogOut size={14} /> Log out</Button>
+      </AdminGateFrame>
+    );
+  }
+  if (firebaseError) {
+    return (
+      <AdminGateFrame>
+        <p className="mt-4 text-sm text-destructive" role="alert">{firebaseError}</p>
+        <Button onClick={() => setRetry((value) => value + 1)} className="mt-6 w-full rounded-full"><RefreshCw size={14} /> Try again</Button>
+        <Button variant="ghost" onClick={logout} className="mt-3 w-full"><LogOut size={14} /> Log out</Button>
+      </AdminGateFrame>
+    );
+  }
+  if (access === "loading" || firebaseReadyFor !== user?.id) {
+    return <AdminGateFrame><Loader2 className="mx-auto mt-6 animate-spin text-primary" aria-label="Loading" /></AdminGateFrame>;
+  }
+  return <AdminCore logout={logout} />;
+}
+
+function AdminGateFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center px-5">
-      <div
-        className="max-w-md w-full rounded-3xl border border-border bg-card p-8 text-center"
-        style={shaking ? { animation: "shake 0.4s ease" } : {}}
-      >
-        <style>{`
-          @keyframes shake {
-            0%,100%{transform:translateX(0)}
-            20%{transform:translateX(-8px)}
-            40%{transform:translateX(8px)}
-            60%{transform:translateX(-5px)}
-            80%{transform:translateX(5px)}
-          }
-        `}</style>
+    <div className="min-h-screen bg-background flex items-center justify-center px-5 py-8">
+      <div className="max-w-md w-full rounded-3xl border border-border bg-card p-8 text-center">
         <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-5">
           <Lock className="text-primary" size={20} />
         </div>
         <h1 className="display text-3xl">Admin control room</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          For organisers only. Enter your password to continue.
-        </p>
-        <form onSubmit={handleSubmit} className="mt-6 space-y-3 text-left">
-          <div className="relative">
-            <input
-              ref={inputRef}
-              type={showPw ? "text" : "password"}
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setError("");
-              }}
-              placeholder="Password"
-              autoFocus
-              className={`w-full rounded-xl border px-4 py-3 pr-11 text-sm bg-background outline-none transition ${
-                error ? "border-destructive" : "border-border focus:border-primary"
-              }`}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPw((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              tabIndex={-1}
-            >
-              {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
-            </button>
-          </div>
-          {error && <p className="text-xs text-destructive pl-1">{error}</p>}
-          <button
-            type="submit"
-            disabled={!password}
-            className="w-full rounded-full bg-primary px-5 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Enter admin
-          </button>
-        </form>
-        <Link
-          to="/"
-          className="mt-4 inline-block text-xs uppercase tracking-widest text-muted-foreground hover:text-primary"
-        >
-          ← Back to site
-        </Link>
+        {children}
+        <Link to="/" className="mt-4 inline-block text-xs uppercase tracking-widest text-muted-foreground hover:text-primary">← Back to site</Link>
       </div>
     </div>
+  );
+}
+
+// ─── Cloud email/password login ──────────────────────────────────────────────
+
+function AdminLogin() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [view, setView] = useState<"login" | "reset" | "reset-sent">("login");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      if (view === "reset") {
+        await sendPasswordReset(email.trim());
+        setView("reset-sent");
+      } else {
+        // Stay on /admin; the validated session and role check decide what is shown.
+        await loginUser(email.trim(), password);
+      }
+    } catch (err: unknown) {
+      const failure = err as { code?: string; message?: string; status?: number };
+      const msg = String(failure.message ?? "").toLowerCase();
+      if (view === "reset") {
+        setError(failure.code === "email_address_invalid" || msg.includes("invalid email")
+          ? "Please enter a valid email address." : "Could not send reset email. Please try again.");
+      } else if (failure.code === "invalid_credentials" || msg.includes("invalid login credentials")) {
+        setError("Invalid email or password.");
+      } else if (failure.code === "email_not_confirmed" || msg.includes("email not confirmed")) {
+        setError("Please confirm your email first. Check your inbox.");
+      } else if (failure.code === "email_address_invalid" || msg.includes("invalid email")) {
+        setError("Please enter a valid email.");
+      } else if (failure.status === 429 || msg.includes("rate limit")) {
+        setError("Too many attempts. Please wait a moment and try again.");
+      } else {
+        setError("Login failed. Please try again.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <AdminGateFrame>
+      {view === "reset-sent" ? (
+        <div className="mt-6 space-y-4">
+          <p className="text-sm font-medium">Reset link sent</p>
+          <p className="text-sm text-muted-foreground">If <span className="text-foreground">{email}</span> is registered, you'll receive a password reset link shortly. Check your spam folder if it doesn't arrive.</p>
+          <Button onClick={() => setView("login")} className="w-full rounded-full">Back to log in</Button>
+        </div>
+      ) : (
+        <>
+          <p className="mt-2 text-sm text-muted-foreground">{view === "reset" ? "Enter your registered email and we'll send you a reset link." : "For organisers only. Enter your password to continue."}</p>
+          <form onSubmit={handleSubmit} className="mt-6 space-y-3 text-left">
+            <input type="email" aria-label="Email" placeholder="Email" autoComplete="username" required autoFocus value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(""); }}
+              className="w-full rounded-xl border border-border focus:border-primary px-4 py-3 text-sm bg-background outline-none transition" />
+            {view === "login" && (
+              <div className="relative">
+                <input type={showPw ? "text" : "password"} aria-label="Password" placeholder="Password" autoComplete="current-password" required value={password}
+                  onChange={(e) => { setPassword(e.target.value); setError(""); }}
+                  className={`w-full rounded-xl border px-4 py-3 pr-11 text-sm bg-background outline-none transition ${error ? "border-destructive" : "border-border focus:border-primary"}`} />
+                <Button type="button" variant="ghost" size="icon" aria-label={showPw ? "Hide password" : "Show password"}
+                  onClick={() => setShowPw((v) => !v)} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                </Button>
+              </div>
+            )}
+            {error && <p className="text-xs text-destructive pl-1" role="alert">{error}</p>}
+            <Button type="submit" disabled={submitting} className="w-full h-auto rounded-full px-5 py-3 text-xs font-semibold uppercase tracking-[0.2em]">
+              {submitting && <Loader2 size={14} className="animate-spin" />}
+              {view === "reset" ? (submitting ? "Sending…" : "Send reset link") : (submitting ? "Logging in…" : "Log In")}
+            </Button>
+            <Button type="button" variant="link" className="w-full text-xs text-muted-foreground" onClick={() => { setView(view === "reset" ? "login" : "reset"); setError(""); }}>
+              {view === "reset" ? "Back" : "Forgot password?"}
+            </Button>
+          </form>
+        </>
+      )}
+    </AdminGateFrame>
   );
 }
 
