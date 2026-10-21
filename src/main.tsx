@@ -20,20 +20,15 @@ if ("serviceWorker" in navigator) {
 
 const params = new URLSearchParams(window.location.search);
 const pwaType = params.get("pwa");
-const hasAdminSession = localStorage.getItem("wh_admin_session") === "1";
 
 if (pwaType === "admin" && !window.location.pathname.startsWith("/admin")) {
   window.location.replace("/admin/");
 } else if (pwaType === "customer" && window.location.pathname.startsWith("/admin")) {
   window.location.replace("/");
-} else if (
-  !pwaType &&
-  hasAdminSession &&
-  (window.location.pathname === "/" || window.location.pathname === "")
-) {
-  window.location.replace("/admin/?pwa=admin");
 } else {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
+  const root = document.getElementById("root");
+  if (!root) throw new Error("Application root is missing");
+  ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <App />
     </React.StrictMode>,
