@@ -46,7 +46,6 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
 
-          if (id.includes("firebase")) return "vendor-firebase";
           if (id.includes("react-router")) return "vendor-router";
           if (
             id.includes("/react-dom/") ||

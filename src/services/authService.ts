@@ -1,5 +1,3 @@
-import { signInAnonymously } from "firebase/auth";
-import { auth } from "@/lib/firebase";
 import { supabase } from "@/integrations/supabase/client";
 
 export async function registerMember(data: {
@@ -73,10 +71,4 @@ export async function sendPasswordReset(email: string) {
     redirectTo: `${window.location.origin}/reset-password`,
   });
   if (error) throw error;
-}
-
-// Admin page only — left unchanged until the admin page is migrated.
-export async function signInAsAdmin(): Promise<void> {
-  if (auth.currentUser) return;
-  await signInAnonymously(auth);
 }

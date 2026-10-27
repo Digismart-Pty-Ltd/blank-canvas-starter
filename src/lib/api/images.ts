@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type ImageBucket = "event-images" | "sponsor-logos";
+export type ImageBucket = "event-images" | "sponsor-logos" | "advert-images";
 
 const TTL_MS = 60 * 60 * 1000; // signed URLs valid for 1 hour
 const cache = new Map<string, { url: string; expires: number }>();

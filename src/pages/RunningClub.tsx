@@ -10,32 +10,8 @@ import tshirt2 from "@/assets/Tshirt-2.jpeg";
 import socks from "@/assets/socks.jpeg";
 import vestBlack from "@/assets/vest-black.jpeg";
 import vestWhite from "@/assets/vest-white.jpeg";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/integrations/supabase/client";
 import { BANK_DETAILS, ADMIN_EMAIL } from "@/lib/demo-data";
-import {
-  collection,
-  addDoc,
-  doc,
-  getDocs,
-  query,
-  where,
-  writeBatch,
-  serverTimestamp,
-  Timestamp,
-} from "firebase/firestore";
-
-// ─── Firebase / notification config ────────────────────────────────────────────
-// Requires the "Trigger Email from Firestore" extension installed, watching the
-// "mail" collection below. Also requires Firestore security rules that allow
-// client writes to "orders" and "mail" (typically scoped/validated via rules).
-
-const BATCH_SIZE = 10;
-
-// ─── Order number generator ─────────────────────────────────────────────────
-function generateOrderNumber() {
-  const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
-  return `LFR-${rand}`;
-}
 // ─── product catalogue ────────────────────────────────────────────────────────
 
 const TSHIRT_SIZES = ["S", "M", "L", "XL"] as const;
@@ -116,17 +92,6 @@ type FormState = {
   notes: string;
 };
 
-type StoredOrder = {
-  id: string;
-  orderNumber: string;
-  createdAt?: Timestamp;
-  name: string;
-  email: string;
-  phone: string;
-  lines: OrderLine[];
-  notes: string;
-  batched: boolean;
-};
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -410,70 +375,18 @@ function OrderModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setSubmitting(true);
 
-    const newOrderNumber = generateOrderNumber(); // ← add
-
-    const orderItems = form.lines
-      .map((l) => `${l.qty}x ${l.product} — ${l.colour}, ${l.size}`)
-      .join("\n");
-
     try {
-      await addDoc(collection(db, "orders"), {
-        orderNumber: newOrderNumber, // ← add
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        lines: form.lines,
-        notes: form.notes,
-        batched: false,
-        createdAt: serverTimestamp(),
+      // The server saves the order, emails the admin and batches every 10 orders.
+      const { data: newOrderNumber, error } = await supabase.rpc("submit_order", {
+        p_name: form.name,
+        p_email: form.email,
+        p_phone: form.phone,
+        p_notes: form.notes,
+        p_lines: form.lines,
       });
+      if (error) throw error;
 
-      await addDoc(collection(db, "mail"), {
-        to: [ADMIN_EMAIL],
-        message: {
-          subject: `New LFR order ${newOrderNumber} from ${form.name}`, // ← updated
-          text: `Order #: ${newOrderNumber}\nName: ${form.name}\nEmail: ${form.email}\nPhone: ${form.phone}\n\nItems:\n${orderItems}\n\nNotes: ${form.notes || "—"}`, // ← updated
-        },
-      });
-
-      const unbatchedSnap = await getDocs(
-        query(collection(db, "orders"), where("batched", "==", false)),
-      );
-
-      if (unbatchedSnap.size >= BATCH_SIZE) {
-        const unbatchedOrders: StoredOrder[] = unbatchedSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<StoredOrder, "id">),
-        }));
-
-        const orderDetails = unbatchedOrders
-          .map((o, i) => {
-            const dateStr = o.createdAt ? o.createdAt.toDate().toISOString().slice(0, 10) : "—";
-            const itemsStr = o.lines
-              .map((l) => `${l.qty}x ${l.product} (${l.colour}, ${l.size})`)
-              .join(", ");
-            return `ORDER ${i + 1} — ${o.orderNumber ?? "—"} — ${dateStr}\nName: ${o.name}\nEmail: ${o.email}\nPhone: ${o.phone}\nItems: ${itemsStr}\nNotes: ${o.notes || "—"}`; // ← updated
-          })
-          .join("\n\n---\n\n");
-
-        await addDoc(collection(db, "mail"), {
-          to: [ADMIN_EMAIL],
-          message: {
-            subject: `LFR order batch summary (${unbatchedOrders.length} orders)`,
-            text: orderDetails,
-          },
-        });
-
-        const batch = writeBatch(db);
-        unbatchedOrders.forEach((o) => {
-          batch.update(doc(db, "orders", o.id), { batched: true });
-        });
-        await batch.commit();
-
-        toast.info(`Batch of ${unbatchedOrders.length} orders sent to admin automatically.`);
-      }
-
-      setOrderNumber(newOrderNumber); // ← add
+      setOrderNumber(newOrderNumber as string);
       setSubmitted(true);
     } catch (err) {
       toast.error("Something went wrong — please try WhatsApp instead.");

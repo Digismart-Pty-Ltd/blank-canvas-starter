@@ -1,16 +1,5 @@
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  query,
-  orderBy,
-  serverTimestamp,
-} from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { db, storage } from "@/lib/firebase"; // make sure `storage` is exported from firebase.ts (see note below)
+import { supabase } from "@/integrations/supabase/client";
+import { compressImage, safeName } from "@/lib/imageCompress";
 
 export type AdvertStatus = "pending" | "approved" | "rejected";
 export type AdvertType = "logo" | "banner";
@@ -28,19 +17,14 @@ export interface Advertisement {
   isMember: boolean;
   price: number;
   adType?: AdvertType;
-  imageUrl?: string;
+  imageUrl?: string; // stored path in advert-images (or a legacy full URL)
   dimensions?: string;
   activationDate?: string;
   months?: number;
   expiryDate?: string;
   status: AdvertStatus;
   enabled: boolean;
-  createdAt?: any;
-}
-
-export function generateAdOrderNumber() {
-  const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
-  return `ADV-${rand}`;
+  createdAt?: string;
 }
 
 export function calculateAdvertExpiry(activationDate: string, months: number): string {
@@ -51,131 +35,127 @@ export function calculateAdvertExpiry(activationDate: string, months: number): s
 
 export function isAdvertisementLive(ad: Advertisement, today = new Date()): boolean {
   if (ad.status !== "approved" || !ad.enabled) return false;
-  const todayString = today.toISOString().slice(0, 10);
-  if (ad.activationDate && ad.activationDate > todayString) return false;
-  if (!ad.expiryDate) return true;
-  return ad.expiryDate >= todayString;
+  const t = today.toISOString().slice(0, 10);
+  if (ad.activationDate && ad.activationDate > t) return false;
+  return !ad.expiryDate || ad.expiryDate >= t;
 }
 
 export function isAdvertisementExpired(ad: Advertisement, today = new Date()): boolean {
   return Boolean(ad.expiryDate && ad.expiryDate < today.toISOString().slice(0, 10));
 }
 
-export function subscribeToAdvertisements(cb: (ads: Advertisement[]) => void) {
-  const q = query(collection(db, "advertisements"), orderBy("createdAt", "desc"));
-  return onSnapshot(
-    q,
-    (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Advertisement[]),
-    (err) => {
-      console.error("advertisements onSnapshot error:", err);
-      cb([]);
-    },
-  );
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function fromRow(r: any): Advertisement {
+  return {
+    id: r.id,
+    orderNumber: r.order_number ?? "",
+    businessName: r.business_name ?? "",
+    slogan: r.slogan ?? "",
+    logoUrl: r.logo_url ?? "",
+    websiteUrl: r.website_url ?? "",
+    contactName: r.contact_name ?? "",
+    contactEmail: r.contact_email ?? "",
+    contactPhone: r.contact_phone ?? "",
+    isMember: !!r.is_member,
+    price: Number(r.price ?? 0),
+    adType: r.ad_type ?? undefined,
+    imageUrl: r.image_url ?? undefined,
+    dimensions: r.dimensions ?? undefined,
+    activationDate: r.activation_date ?? undefined,
+    months: r.months ?? undefined,
+    expiryDate: r.expiry_date ?? undefined,
+    status: r.status ?? "pending",
+    enabled: !!r.enabled,
+    createdAt: r.created_at ?? undefined,
+  };
 }
 
-// Home page only cares about live, approved adverts — filtered client-side
-// so we don't need a composite Firestore index.
+function live(table: string, select: string, cb: (rows: Advertisement[]) => void) {
+  let alive = true;
+  const load = async () => {
+    let q = supabase.from(table as "advertisements").select(select);
+    if (table === "advertisements") q = q.order("created_at", { ascending: false });
+    const { data, error } = await q;
+    if (error) {
+      console.error(`${table} load error:`, error);
+      if (alive) cb([]);
+      return;
+    }
+    if (alive) cb((data ?? []).map(fromRow));
+  };
+  void load();
+  const channel = supabase
+    .channel(`ads-${Math.random().toString(36).slice(2)}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "advertisements" }, () => void load())
+    .subscribe();
+  return () => {
+    alive = false;
+    supabase.removeChannel(channel);
+  };
+}
+
+/** Admin: every advert. */
+export function subscribeToAdvertisements(cb: (ads: Advertisement[]) => void) {
+  return live("advertisements", "*", cb);
+}
+
+/** Public: live adverts from the public view. */
 export function subscribeToActiveAdvertisements(cb: (ads: Advertisement[]) => void) {
-  return subscribeToAdvertisements((ads) =>
-    cb(ads.filter((a) => isAdvertisementLive(a))),
+  return live("public_advertisements", "*", (ads) =>
+    cb(ads.map((a) => ({ ...a, status: "approved" as const, enabled: true })).filter((a) => isAdvertisementLive(a))),
   );
 }
 
 export async function deactivateExpiredAdvertisements(ads: Advertisement[]) {
   await Promise.all(
-    ads
-      .filter((ad) => ad.enabled && isAdvertisementExpired(ad))
-      .map((ad) => updateAdvertisement(ad.id, { enabled: false })),
+    ads.filter((ad) => ad.enabled && isAdvertisementExpired(ad)).map((ad) => updateAdvertisement(ad.id, { enabled: false })),
   );
 }
 
+/** Public application — goes through the server function. Returns the order number. */
 export async function createAdvertisement(
-  data: Omit<Advertisement, "id" | "createdAt" | "status" | "enabled">,
-) {
-  const docRef = await addDoc(collection(db, "advertisements"), {
-    ...data,
-    status: "pending",
-    enabled: false,
-    createdAt: serverTimestamp(),
-  });
-  return docRef.id;
+  data: Omit<Advertisement, "id" | "createdAt" | "status" | "enabled" | "orderNumber" | "expiryDate">,
+): Promise<string> {
+  const { data: num, error } = await supabase.rpc("submit_advertisement", {
+    p_business_name: data.businessName,
+    p_slogan: data.slogan,
+    p_logo_url: data.logoUrl,
+    p_website_url: data.websiteUrl,
+    p_contact_name: data.contactName,
+    p_contact_email: data.contactEmail,
+    p_contact_phone: data.contactPhone,
+    p_is_member: data.isMember,
+    p_price: data.price,
+    p_ad_type: data.adType ?? null,
+    p_image_url: data.imageUrl ?? null,
+    p_dimensions: data.dimensions ?? null,
+    p_activation_date: data.activationDate ?? null,
+    p_months: data.months ?? null,
+  } as never);
+  if (error) throw error;
+  return num as unknown as string;
 }
 
 export async function updateAdvertisement(id: string, data: Partial<Advertisement>) {
-  await updateDoc(doc(db, "advertisements", id), data as any);
+  const r: Record<string, unknown> = {};
+  if (data.status !== undefined) r.status = data.status;
+  if (data.enabled !== undefined) r.enabled = data.enabled;
+  const { error } = await supabase.from("advertisements").update(r as never).eq("id", id);
+  if (error) throw error;
 }
 
 export async function deleteAdvertisement(id: string) {
-  await deleteDoc(doc(db, "advertisements", id));
+  const { error } = await supabase.from("advertisements").delete().eq("id", id);
+  if (error) throw error;
 }
 
-export async function uploadAdvertLogo(
-  file: File,
-  onProgress?: (pct: number) => void,
-): Promise<string> {
-  const maxSourceBytes = 50 * 1024 * 1024;
-  const maxUploadBytes = 10 * 1024 * 1024;
-  if (file.size > maxSourceBytes) {
-    throw new Error("Image is too large to process on this device. Please use an image under 50 MB.");
-  }
-
-  const objectUrl = URL.createObjectURL(file);
-  const uploadFile = await new Promise<Blob>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => {
-      let width = image.width;
-      let height = image.height;
-      let quality = 0.82;
-      const maxDimension = 1600;
-
-      const compress = (attempt: number) => {
-        const scale = Math.min(1, maxDimension / Math.max(width, height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(width * scale));
-        canvas.height = Math.max(1, Math.round(height * scale));
-        const context = canvas.getContext("2d");
-        if (!context) {
-          reject(new Error("This image could not be processed on this device."));
-          return;
-        }
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          if (!blob) {
-            reject(new Error("This image could not be compressed."));
-            return;
-          }
-          if (blob.size <= maxUploadBytes) {
-            resolve(blob);
-            return;
-          }
-          if (attempt >= 7) {
-            reject(new Error("This image could not be compressed below 10 MB."));
-            return;
-          }
-          width *= 0.8;
-          height *= 0.8;
-          quality = Math.max(0.45, quality - 0.08);
-          compress(attempt + 1);
-        }, "image/jpeg", quality);
-      };
-
-      compress(0);
-    };
-    image.onerror = () => {
-      reject(new Error("This image format cannot be decoded by this browser. Please convert it to JPG or PNG and try again."));
-    };
-    image.src = objectUrl;
-  }).finally(() => URL.revokeObjectURL(objectUrl));
-
-  const path = `advert-images/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-  const storageRef = ref(storage, path);
-  const task = uploadBytesResumable(storageRef, uploadFile);
-  return new Promise((resolve, reject) => {
-    task.on(
-      "state_changed",
-      (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-      reject,
-      async () => resolve(await getDownloadURL(task.snapshot.ref)),
-    );
-  });
+export async function uploadAdvertLogo(file: File, onProgress?: (pct: number) => void): Promise<string> {
+  onProgress?.(10);
+  const blob = await compressImage(file, 1600);
+  onProgress?.(50);
+  const path = `${Date.now()}-${safeName(file.name)}.jpg`;
+  const { error } = await supabase.storage.from("advert-images").upload(path, blob, { contentType: "image/jpeg" });
+  if (error) throw error;
+  onProgress?.(100);
+  return path;
 }

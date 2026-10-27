@@ -1,9 +1,10 @@
+import { SignedImage } from "@/components/SignedImage";
 import { useEffect, useState } from "react";
 import { ArrowUpRight, Megaphone, ZoomIn, ZoomOut } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   isAdvertisementLive,
-  subscribeToAdvertisements,
+  subscribeToActiveAdvertisements,
   type Advertisement,
 } from "@/lib/advertService";
 
@@ -14,7 +15,7 @@ export default function Advertisements() {
 
   useEffect(() => {
     document.title = "Advertisements - Waven Harper Fitness";
-    return subscribeToAdvertisements((rows) => {
+    return subscribeToActiveAdvertisements((rows) => {
       setAdverts(rows.filter((ad) => isAdvertisementLive(ad)));
     });
   }, []);
@@ -60,8 +61,9 @@ export default function Advertisements() {
                           }}
                           className="relative h-full w-full cursor-zoom-in"
                         >
-                          <img
-                            src={imageUrl}
+                          <SignedImage
+                            bucket="advert-images"
+                            value={imageUrl}
                             alt={ad.businessName}
                             loading="lazy"
                             decoding="async"
@@ -79,8 +81,9 @@ export default function Advertisements() {
                           aria-label={`Visit ${ad.businessName}`}
                           className="flex h-full w-full items-center justify-center"
                         >
-                          <img
-                            src={imageUrl}
+                          <SignedImage
+                            bucket="advert-images"
+                            value={imageUrl}
                             alt={ad.businessName}
                             loading="lazy"
                             decoding="async"
@@ -138,8 +141,9 @@ export default function Advertisements() {
           </div>
           {selectedBanner && (
             <div className="max-h-[75vh] overflow-auto">
-              <img
-                src={selectedBanner.imageUrl || selectedBanner.logoUrl}
+              <SignedImage
+                bucket="advert-images"
+                value={selectedBanner.imageUrl || selectedBanner.logoUrl}
                 alt={selectedBanner.businessName}
                 className={`h-auto transition-[width] duration-200 ${
                   bannerZoomed ? "w-[200%] max-w-none" : "w-full"

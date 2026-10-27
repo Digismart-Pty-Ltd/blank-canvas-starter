@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { nextTierInfo, useStore } from "@/lib/store";
+import { nextTierInfo } from "@/lib/store";
 import React, { useEffect, useState, useRef } from "react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
@@ -46,36 +46,36 @@ import {
   createNotification,
   hideNotificationForAdmin,
   ADMIN_CLEAR_KEY,
+  deleteNotification,
   type Notification,
 } from "@/lib/notificationService";
 import {
-  createEventInFirestore,
-  updateEventInFirestore,
-  deleteEventFromFirestore,
+  createEventRecord,
+  updateEventRecord,
+  removeEventRecord,
   uploadEventImage,
   subscribeToEvents,
 } from "@/lib/eventService";
 import {
-  collection,
-  query,
-  onSnapshot,
-  orderBy,
-  doc,
-  limit,
-  deleteDoc,
-  updateDoc,
-  addDoc,
-  getDocs,
-  where,
-  writeBatch,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { ADMIN_EMAIL } from "@/lib/demo-data";
+  useAdminRegistrations as useRegistrations,
+  useAdminMembers as useUsers,
+  useAdminOrders,
+  useAdminRewards,
+  useAppSettings,
+  setMemberTier,
+  adminCheckIn,
+  sendOrderBatch,
+  deleteOrders,
+  createRewardRecord,
+  updateRewardRecord,
+  deleteRewardRecord,
+  type AdminRegistration,
+  type AdminMember,
+} from "@/lib/api/admin";
+import { SignedImage } from "@/components/SignedImage";
 import { formatDistanceKm } from "@/lib/utils";
-import { signInAsAdmin, loginUser, logoutUser, sendPasswordReset } from "@/services/authService";
+import { loginUser, logoutUser, sendPasswordReset } from "@/services/authService";
 import { useAuth } from "@/context/AuthContext";
-import { auth as firebaseAuth } from "@/lib/firebase";
-import { signOut as firebaseSignOut } from "firebase/auth";
 import { adminAccess } from "@/lib/admin-access";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,30 +99,8 @@ const tierMeta: Record<Tier, { color: string }> = {
 
 const tierRank: Record<Tier, number> = { Pink: 0, Silver: 1, Gold: 2, Platinum: 3 };
 
-interface FSMember {
-  id: string;
-  name: string;
-  email: string;
-  contact?: string;
-  emergency?: string;
-  joined: string;
-  races: number;
-  tier: Tier;
-  role: "member";
-}
-
-interface FSRegistration {
-  id: string;
-  eventId: string;
-  userId: string | null;
-  name: string;
-  contact?: string;
-  emergency?: string;
-  openRunner: boolean;
-  tier?: string;
-  checkedInAt: string | null;
-  createdAt: any;
-}
+type FSMember = AdminMember;
+type FSRegistration = AdminRegistration;
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -217,7 +195,7 @@ function NotificationsAdmin() {
   async function handleDelete(id: string) {
     if (!confirm("Delete this notification?")) return;
     try {
-      await deleteDoc(doc(db, "notifications", id));
+      await deleteNotification(id);
       toast.success("Deleted.");
     } catch {
       toast.error("Could not delete.");
@@ -285,8 +263,7 @@ function NotificationsAdmin() {
                 <div className="text-sm font-medium">{n.title}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">{n.body}</div>
                 <div className="text-[10px] uppercase tracking-widest text-muted-foreground mt-1">
-                  {n.audience} · {new Date(n.createdAt).toLocaleDateString("en-ZA")} ·{" "}
-                  {n.readBy.length} read
+                  {n.audience} · {new Date(n.createdAt).toLocaleDateString("en-ZA")}
                 </div>
               </li>
             ))}
@@ -297,147 +274,11 @@ function NotificationsAdmin() {
   );
 }
 
-// ── Hook: subscribe to all registrations (FIXED) ────────────────────────────────
-
-function useRegistrations() {
-  const [registrations, setRegistrations] = useState<FSRegistration[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    let unsubscribe: (() => void) | null = null;
-
-const subscribe = async () => {
-  try {
-    unsubscribe = onSnapshot(
-      query(
-        collection(db, "eventRegistrations"),
-        orderBy("createdAt", "desc"),
-        limit(1000)  // ✅ ADD THIS
-      ),
-      (snap) => {
-            if (!isMounted) return;
-            const regs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-            regs.sort((a: any, b: any) => {
-              const ta = a.createdAt?.toMillis?.() ?? 0;
-              const tb = b.createdAt?.toMillis?.() ?? 0;
-              return tb - ta;
-            });
-            setRegistrations(regs);
-            setLoading(false);
-            setError(null);
-          },
-          (err) => {
-            if (!isMounted) return;
-            console.error("registrations onSnapshot error:", err);
-            setError(err.message);
-            setLoading(false);
-          }
-        );
-      } catch (err) {
-        if (!isMounted) return;
-        console.error("subscription setup error:", err);
-        setError("Failed to load registrations");
-        setLoading(false);
-      }
-    };
-
-    subscribe();
-
-    return () => {
-      isMounted = false;
-      if (unsubscribe) {
-        try {
-          unsubscribe();
-        } catch (err) {
-          console.error("unsubscribe error:", err);
-        }
-      }
-    };
-  }, []);
-
-  return { registrations, loading, error };
-}
-
-// ── Hook: subscribe to all users (FIXED) ──────────────────────────────────────
-
-function useUsers() {
-  const [members, setMembers] = useState<FSMember[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    let unsubscribe: (() => void) | null = null;
-
-const subscribe = async () => {
-  try {
-    unsubscribe = onSnapshot(
-      query(
-        collection(db, "users"),
-        orderBy("joined", "desc"),
-        limit(500)  // ✅ ADD THIS
-      ),
-      (snap) => {
-            if (!isMounted) return;
-            const allUsers = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-
-            const dedup = <T extends { email: string; joined?: string }>(arr: T[]): T[] => {
-              const map = new Map<string, T>();
-              for (const u of arr) {
-                const existing = map.get(u.email);
-                if (!existing || (u.joined ?? "") > (existing.joined ?? "")) {
-                  map.set(u.email, u);
-                }
-              }
-              return Array.from(map.values());
-            };
-
-            setMembers(dedup(allUsers.filter((u: any) => u.role === "member") as FSMember[]));
-            setLoading(false);
-            setError(null);
-          },
-          (err) => {
-            if (!isMounted) return;
-            console.error("users onSnapshot error:", err);
-            setError(err.message);
-            setLoading(false);
-          }
-        );
-      } catch (err) {
-        if (!isMounted) return;
-        console.error("subscription setup error:", err);
-        setError("Failed to load users");
-        setLoading(false);
-      }
-    };
-
-    subscribe();
-
-    return () => {
-      isMounted = false;
-      if (unsubscribe) {
-        try {
-          unsubscribe();
-        } catch (err) {
-          console.error("unsubscribe error:", err);
-        }
-      }
-    };
-  }, []);
-
-  return { members, loading, error };
-}
-
-// ── Hook: subscribe to events ─────────────────────────────────────────────────
+// ── Hook: live events ─────────────────────────────────────────────────────────
 function useEvents() {
-  const { state, setEvents } = useStore();
-  useEffect(() => {
-    const unsub = subscribeToEvents((events) => setEvents(events));
-    return () => unsub();
-  }, [setEvents]);
-  return state.events;
+  const [events, setEvents] = useState<Event[]>([]);
+  useEffect(() => subscribeToEvents(setEvents), []);
+  return events;
 }
 
 // ── Today's date string (YYYY-MM-DD, local time) ─────────────────────────────
@@ -624,35 +465,13 @@ export default function Admin() {
 function AdminGate() {
   const navigate = useNavigate();
   const { user, isAdmin, loading } = useAuth();
-  const { logout: clearLegacyUser } = useStore();
-  const [firebaseReadyFor, setFirebaseReadyFor] = useState<string | null>(null);
-  const [firebaseError, setFirebaseError] = useState("");
-  const [retry, setRetry] = useState(0);
   const access = adminAccess(loading, user?.id ?? null, isAdmin);
 
-  useEffect(() => {
-    let active = true;
-    setFirebaseReadyFor(null);
-    setFirebaseError("");
-    if (access !== "admin" || !user?.id) return;
-    const userId = user.id;
-    // TEMPORARY: remove when all admin tabs are on Supabase
-    void signInAsAdmin().then(() => {
-      if (active) setFirebaseReadyFor(userId);
-    }).catch((err: unknown) => {
-      if (!active) return;
-      const code = (err as { code?: string })?.code;
-      setFirebaseError(code ? `Firebase login failed (${code}).` : "Could not connect to Firebase.");
-    });
-    return () => { active = false; };
-  }, [access, user?.id, retry]);
-
   async function logout() {
-    setFirebaseReadyFor(null);
     localStorage.removeItem("wh_admin_session");
-    clearLegacyUser();
-    const results = await Promise.allSettled([logoutUser(), firebaseSignOut(firebaseAuth)]);
-    if (results.some((result) => result.status === "rejected")) {
+    try {
+      await logoutUser();
+    } catch {
       toast.error("Could not log out. Please try again.");
       return;
     }
@@ -668,16 +487,7 @@ function AdminGate() {
       </AdminGateFrame>
     );
   }
-  if (firebaseError) {
-    return (
-      <AdminGateFrame>
-        <p className="mt-4 text-sm text-destructive" role="alert">{firebaseError}</p>
-        <Button onClick={() => setRetry((value) => value + 1)} className="mt-6 w-full rounded-full"><RefreshCw size={14} /> Try again</Button>
-        <Button variant="ghost" onClick={logout} className="mt-3 w-full"><LogOut size={14} /> Log out</Button>
-      </AdminGateFrame>
-    );
-  }
-  if (access === "loading" || firebaseReadyFor !== user?.id) {
+  if (access === "loading") {
     return <AdminGateFrame><Loader2 className="mx-auto mt-6 animate-spin text-primary" aria-label="Loading" /></AdminGateFrame>;
   }
   return <AdminCore logout={logout} />;
@@ -853,8 +663,9 @@ function AdvertsAdmin() {
                       <div className="flex items-center gap-3 min-w-[220px]">
                         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-border bg-background flex items-center justify-center">
                           {(ad.imageUrl || ad.logoUrl) ? (
-                            <img
-                              src={ad.imageUrl || ad.logoUrl}
+                            <SignedImage
+                              bucket="advert-images"
+                              value={ad.imageUrl || ad.logoUrl}
                               alt={ad.businessName}
                               className="h-full w-full object-contain"
                             />
@@ -1096,20 +907,8 @@ function Overview() {
   const allEvents = useEvents();
   const { registrations, loading: regLoading } = useRegistrations();
   const { members, loading: usersLoading } = useUsers();
-  const [pendingOrders, setPendingOrders] = useState(0);
-  
-  useEffect(() => {
-    let isMounted = true;
-    const unsub = onSnapshot(collection(db, "orders"), (snap) => {
-      if (isMounted) {
-        setPendingOrders(snap.docs.filter((d) => !d.data().batched).length);
-      }
-    });
-    return () => {
-      isMounted = false;
-      unsub();
-    };
-  }, []);
+  const { orders: allOrders } = useAdminOrders();
+  const pendingOrders = allOrders.filter((o) => !o.batched).length;
 
   const [pendingAdverts, setPendingAdverts] = useState(0);
   useEffect(() => {
@@ -1236,7 +1035,6 @@ function Overview() {
 // ─── Events Admin ─────────────────────────────────────────────────────────────
 
 function EventsAdmin() {
-  const { state, createEvent, updateEvent, deleteEvent } = useStore();
   const allEvents = useEvents();
   const { registrations } = useRegistrations();
   const [editing, setEditing] = useState<Event | null>(null);
@@ -1320,12 +1118,10 @@ function EventsAdmin() {
     setSaving(true);
     try {
       if (editing) {
-        await updateEventInFirestore(editing.id, data);
-        updateEvent(editing.id, data);
+        await updateEventRecord(editing.id, data);
         toast.success("Event updated.");
       } else {
-        const id = await createEventInFirestore(data);
-        createEvent({ ...data, id } as any);
+        await createEventRecord(data);
         toast.success("Event created — live on site now.");
 
         try {
@@ -1352,13 +1148,12 @@ function EventsAdmin() {
 
   async function handleDelete(e: Event) {
     const confirmed = window.confirm(
-      `Delete "${e.title}"?\n\nAll attendee sign-ups and check-ins for this event will remain in the database but the event will be removed from the site. This cannot be undone.`,
+      `Remove "${e.title}"?\n\nIf people have booked, the event is archived: it disappears from the site but all sign-ups and check-ins are kept. Events with no bookings are deleted.`,
     );
     if (!confirmed) return;
     try {
-      await deleteEventFromFirestore(e.id);
-      deleteEvent(e.id);
-      toast.success("Event deleted.");
+      const result = await removeEventRecord(e.id);
+      toast.success(result === "archived" ? "Event archived — bookings kept." : "Event deleted.");
     } catch {
       toast.error("Failed to delete. Try again.");
     }
@@ -1516,9 +1311,7 @@ const filteredRegs = search.trim()
 
     setCheckingIn(regId);
     try {
-      await updateDoc(doc(db, "eventRegistrations", regId), {
-        checkedInAt: new Date().toISOString(),
-      });
+      await adminCheckIn(regId);
       toast.success("Checked in.");
     } catch (err) {
       console.error("Manual check-in failed:", err);
@@ -1537,8 +1330,9 @@ const filteredRegs = search.trim()
         <td className="p-4 font-medium">
           <div className="flex items-center gap-3">
 {e.image && (
-  <img 
-    src={e.image} 
+  <SignedImage
+    bucket="event-images"
+    value={e.image}
     alt="" 
     className="w-10 h-10 rounded-lg object-cover shrink-0"
     loading="lazy"
@@ -1930,8 +1724,9 @@ useEffect(() => {
                 className="rounded-xl overflow-hidden bg-secondary border border-border"
                 style={{ height: f.imageOrientation === "portrait" ? "280px" : "144px" }}
               >
-                <img
-                  src={f.image}
+                <SignedImage
+                  bucket="event-images"
+                  value={f.image}
                   alt="Cover preview"
                   className="w-full h-full object-cover"
                   onError={(e) => (e.currentTarget.style.display = "none")}
@@ -1982,7 +1777,7 @@ function MembersAdmin() {
   async function handleTierChange(memberId: string, newTier: Tier) {
     setUpdatingTier(memberId);
     try {
-      await updateDoc(doc(db, "users", memberId), { tier: newTier });
+      await setMemberTier(memberId, newTier);
       toast.success("Tier updated.");
     } catch {
       toast.error("Could not update tier.");
@@ -1992,13 +1787,8 @@ function MembersAdmin() {
   }
 
   async function handleDeleteUser(userId: string, name: string) {
-    if (!confirm(`Remove ${name} from the database? This cannot be undone.`)) return;
-    try {
-      await deleteDoc(doc(db, "users", userId));
-      toast.success(`${name} removed.`);
-    } catch {
-      toast.error("Could not remove user.");
-    }
+    void userId;
+    toast.error(`Removing ${name} isn't available yet. Their bookings and history are kept.`);
   }
 
   function raceCount(userId: string) {
@@ -2214,23 +2004,10 @@ function MembersAdmin() {
 const REWARD_TIERS: Array<Tier> = ["Pink", "Silver", "Gold", "Platinum"];
 
 function RewardsAdmin() {
-  const { createReward, updateReward, deleteReward } = useStore();
-  const [firestoreRewards, setFirestoreRewards] = useState<Reward[]>([]);
+  const firestoreRewards: Reward[] = useAdminRewards();
   const [editing, setEditing] = useState<Reward | null>(null);
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    let isMounted = true;
-    const unsub = onSnapshot(collection(db, "rewards"), (snap) => {
-      if (isMounted) {
-        setFirestoreRewards(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Reward[]);
-      }
-    });
-    return () => {
-      isMounted = false;
-      unsub();
-    };
-  }, []);
 
   const blank: Omit<Reward, "id"> = { tier: "Pink", title: "", description: "", expiresInDays: 30 };
   const grouped = REWARD_TIERS.reduce<Record<string, Reward[]>>((acc, t) => {
@@ -2256,14 +2033,14 @@ function RewardsAdmin() {
   async function handleSave(data: Omit<Reward, "id">) {
     if (editing) {
       try {
-        await updateDoc(doc(db, "rewards", editing.id), data as any);
+        await updateRewardRecord(editing.id, data);
         toast.success("Reward updated.");
       } catch {
         toast.error("Could not update reward.");
       }
     } else {
       try {
-        await addDoc(collection(db, "rewards"), { ...data, createdAt: new Date().toISOString() });
+        await createRewardRecord(data);
         toast.success("Reward created.");
         if (data.tier !== "Special") {
           try {
@@ -2292,7 +2069,7 @@ function RewardsAdmin() {
     );
     if (!confirmed) return;
     try {
-      await deleteDoc(doc(db, "rewards", r.id));
+      await deleteRewardRecord(r.id);
       toast.success("Reward deleted.");
     } catch {
       toast.error("Could not delete reward.");
@@ -2500,33 +2277,8 @@ function RewardModal({
 const ORDER_BATCH_SIZE = 10;
 
 function OrdersAdmin() {
-  const [orders, setOrders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { orders, loading } = useAdminOrders();
   const [sendingBatch, setSendingBatch] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    const unsub = onSnapshot(
-      collection(db, "orders"),
-      (snap) => {
-        if (!isMounted) return;
-        const rows = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-        setOrders(rows);
-        setLoading(false);
-      },
-      (err) => {
-        if (!isMounted) return;
-        console.error("orders onSnapshot error:", err);
-        setLoading(false);
-      },
-    );
-    return () => {
-      isMounted = false;
-      unsub();
-    };
-  }, []);
 
   const unbatched = orders.filter((o) => !o.batched);
   const batchedOrders = orders.filter((o) => o.batched);
@@ -2535,31 +2287,8 @@ function OrdersAdmin() {
     if (unbatched.length === 0) return;
     setSendingBatch(true);
     try {
-      const orderDetails = unbatched
-        .map((o, i) => {
-          const dateStr = o.createdAt?.toDate?.().toISOString().slice(0, 10) ?? "—";
-          const itemsStr = o.lines
-            .map((l: any) => `${l.qty}x ${l.product} (${l.colour}, ${l.size})`)
-            .join(", ");
-          return `ORDER ${i + 1} — ${dateStr}\nName: ${o.name}\nEmail: ${o.email}\nPhone: ${o.phone}\nItems: ${itemsStr}\nNotes: ${o.notes || "—"}`;
-        })
-        .join("\n\n---\n\n");
-
-      await addDoc(collection(db, "mail"), {
-        to: [ADMIN_EMAIL],
-        message: {
-          subject: `LFR order batch summary (${unbatched.length} orders) — manually sent`,
-          text: orderDetails,
-        },
-      });
-
-      const batch = writeBatch(db);
-      unbatched.forEach((o) => {
-        batch.update(doc(db, "orders", o.id), { batched: true });
-      });
-      await batch.commit();
-
-      toast.success(`Batch of ${unbatched.length} orders sent to admin.`);
+      const sent = await sendOrderBatch();
+      toast.success(`Batch of ${sent} orders sent to admin.`);
     } catch (err) {
       console.error("Manual batch send failed:", err);
       toast.error("Failed to send batch. Please try again.");
@@ -2571,7 +2300,7 @@ function OrdersAdmin() {
   async function clearAll() {
     if (!confirm("Clear all order history? This cannot be undone.")) return;
     try {
-      await Promise.all(orders.map((o) => deleteDoc(doc(db, "orders", o.id))));
+      await deleteOrders(orders.map((o) => o.id));
       toast.success("Order history cleared.");
     } catch {
       toast.error("Could not clear orders.");
@@ -2586,7 +2315,7 @@ function OrdersAdmin() {
     )
       return;
     try {
-      await deleteDoc(doc(db, "orders", orderId));
+      await deleteOrders([orderId]);
       toast.success(`Order ${orderNumber || ""} deleted.`);
     } catch {
       toast.error("Could not delete order.");
@@ -2595,7 +2324,7 @@ function OrdersAdmin() {
 
   function exportOrdersExcel() {
     const rows = orders.map((o) => ({
-      Date: o.createdAt?.toDate?.().toISOString().slice(0, 10) ?? "",
+      Date: o.createdAt?.slice(0, 10) ?? "",
       Name: o.name,
       Email: o.email,
       Phone: o.phone,
@@ -2635,7 +2364,7 @@ function OrdersAdmin() {
                     {o.orderNumber ?? "—"}
                   </td>
                   <td className="p-4 text-muted-foreground whitespace-nowrap">
-                    {o.createdAt?.toDate?.().toISOString().slice(0, 10) ?? "—"}
+                    {o.createdAt?.slice(0, 10) ?? "—"}
                   </td>
                   <td className="p-4 font-medium whitespace-nowrap">{o.name}</td>
                   <td className="p-4 text-muted-foreground">{o.email}</td>
@@ -2759,14 +2488,14 @@ const QR_CODES = [
   {
     id: "checkin",
     label: "Event Check-In",
-    value: "LFR-CHECKIN",
+    value: "checkin_code",
     description: "One permanent code for all events. Members scan this at any event to check in.",
     color: "#e91e8c",
   },
   {
     id: "silver-redeem",
     label: "Silver Reward",
-    value: "LFR-REDEEM-SILVER",
+    value: "redeem_code:Silver",
     description:
       "Permanent Silver tier redemption code. Show this to any Silver member redeeming a reward.",
     color: "#9ca3af",
@@ -2774,7 +2503,7 @@ const QR_CODES = [
   {
     id: "gold-redeem",
     label: "Gold Reward",
-    value: "LFR-REDEEM-GOLD",
+    value: "redeem_code:Gold",
     description:
       "Permanent Gold tier redemption code. Show this to any Gold member redeeming a reward.",
     color: "#f59e0b",
@@ -2782,7 +2511,7 @@ const QR_CODES = [
   {
     id: "platinum-redeem",
     label: "Platinum Reward",
-    value: "LFR-REDEEM-PLATINUM",
+    value: "redeem_code:Platinum",
     description:
       "Permanent Platinum tier redemption code. Show this to any Platinum member redeeming a reward.",
     color: "#a78bfa",
@@ -2790,6 +2519,10 @@ const QR_CODES = [
 ] as const;
 
 function QRCodesAdmin() {
+  const settings = useAppSettings();
+  const codes = QR_CODES.map((qr) => ({ ...qr, value: settings[qr.value] ?? "" })).filter(
+    (qr) => qr.value && qr.value !== "CHANGE_ME",
+  );
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="rounded-2xl border border-border bg-card p-5">
@@ -2800,7 +2533,10 @@ function QRCodesAdmin() {
         </p>
       </div>
       <div className="grid gap-6 md:grid-cols-2">
-        {QR_CODES.map((qr) => (
+        {codes.length === 0 && (
+          <p className="text-sm text-muted-foreground">Loading codes…</p>
+        )}
+        {codes.map((qr) => (
           <QRCodeCard key={qr.id} qr={qr} />
         ))}
       </div>
@@ -2879,7 +2615,7 @@ function SponsorsAdmin() {
                   <tr key={s.id} className="hover:bg-secondary/30">
                     <td className="p-4">
                       <div className="w-16 h-12 rounded-lg bg-white flex items-center justify-center overflow-hidden border border-border">
-                        <img src={s.logoUrl} alt={s.name} className="max-w-full max-h-full object-contain" />
+                        <SignedImage bucket="sponsor-logos" value={s.logoUrl} alt={s.name} className="max-w-full max-h-full object-contain" />
                       </div>
                     </td>
                     <td className="p-4 font-medium">{s.name}</td>
@@ -3060,7 +2796,7 @@ function SponsorModal({
             )}
             {logoUrl && !uploading && (
               <div className="rounded-xl overflow-hidden bg-white border border-border h-24 flex items-center justify-center p-3">
-                <img src={logoUrl} alt="Logo preview" className="max-w-full max-h-full object-contain" />
+                <SignedImage bucket="sponsor-logos" value={logoUrl} alt="Logo preview" className="max-w-full max-h-full object-contain" />
               </div>
             )}
             {logoUrl && !uploading && (

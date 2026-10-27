@@ -7,7 +7,7 @@ export type AppEvent = Event & {
   imageOrientation?: string | null;
 };
 
-type Row = {
+export type EventRow = {
   id: string;
   title: string;
   event_date: string;
@@ -22,7 +22,7 @@ type Row = {
   image_orientation: string | null;
 };
 
-function toEvent(r: Row): AppEvent {
+export function toEvent(r: EventRow): AppEvent {
   return {
     id: r.id,
     title: r.title,
@@ -46,10 +46,11 @@ export async function fetchEvents(): Promise<AppEvent[]> {
     .select(
       "id, title, event_date, event_time, meeting_place, after_run_place, description, image_url, members_only, distance_km, distance_display, image_orientation",
     )
+    .eq("archived", false)
     .order("event_date", { ascending: true })
     .order("event_time", { ascending: true, nullsFirst: true });
   if (error) throw error;
-  return (data as Row[]).map(toEvent);
+  return (data as EventRow[]).map(toEvent);
 }
 
 /** All events, kept live via realtime. */

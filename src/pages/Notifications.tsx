@@ -8,7 +8,7 @@ import {
   hideNotificationForUser,
   type Notification,
 } from "@/lib/notificationService";
-import { requestPushToken } from "@/lib/firebase";
+import { requestPushToken } from "@/lib/push";
 
 const tierRank: Record<string, number> = { Pink: 0, Silver: 1, Gold: 2, Platinum: 3 };
 
@@ -59,7 +59,6 @@ export default function NotificationsPage() {
   async function handleEnablePush() {
     if (!uid) return;
     setPushStatus("asking");
-    // Token saving is paused during migration; only the permission prompt runs.
     const token = await requestPushToken();
     if (token) {
       setPushStatus("granted");
