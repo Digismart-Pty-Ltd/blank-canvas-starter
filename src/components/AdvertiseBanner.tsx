@@ -1,3 +1,4 @@
+import { SignedImage } from "@/components/SignedImage";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ArrowUpRight, Megaphone } from "lucide-react";
@@ -78,8 +79,9 @@ export default function AdvertiseBanner() {
                   : "h-14 w-14 rounded-2xl bg-black flex items-center justify-center overflow-hidden shrink-0 border border-border"
               }
             >
-              <img
-                src={imageUrl}
+              <SignedImage
+                bucket="advert-images"
+                value={imageUrl}
                 alt={slide.businessName}
                 loading="lazy"
                 decoding="async"
