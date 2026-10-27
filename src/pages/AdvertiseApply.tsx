@@ -5,14 +5,11 @@ import { CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/context/AuthContext";
-import { db } from "@/lib/firebase";
-import { collection, addDoc } from "firebase/firestore";
 import { BANK_DETAILS, ADMIN_EMAIL } from "@/lib/demo-data";
 import {
   calculateAdvertExpiry,
   createAdvertisement,
   uploadAdvertLogo,
-  generateAdOrderNumber,
   type AdvertType,
 } from "@/lib/advertService";
 import { Calendar } from "@/components/ui/calendar";
@@ -109,11 +106,9 @@ export default function AdvertiseApply() {
     if (!contactPhone.trim()) return toast.error("Please enter a contact phone number.");
 
     setSubmitting(true);
-    const newOrderNumber = generateAdOrderNumber();
-
     try {
-      await createAdvertisement({
-        orderNumber: newOrderNumber,
+      // The server saves the application and emails the admin.
+      const newOrderNumber = await createAdvertisement({
         businessName,
         slogan,
         websiteUrl,
@@ -128,16 +123,8 @@ export default function AdvertiseApply() {
         dimensions: adType === "logo" ? "Logo" : dimensions,
         activationDate,
         months: Math.max(1, Number(months) || 1),
-        expiryDate,
       });
 
-      await addDoc(collection(db, "mail"), {
-        to: [ADMIN_EMAIL],
-        message: {
-          subject: `New advert application ${newOrderNumber} — payment verification required`,
-          text: `A new advertising application has been submitted and is pending payment verification.\n\nOrder reference: ${newOrderNumber}\nBusiness: ${businessName}\nSlogan: ${slogan || "—"}\nWebsite or social media page: ${websiteUrl}\nContact: ${contactName}\nEmail: ${contactEmail}\nPhone: ${contactPhone}\nMember: ${memberAnswer === "yes" ? "Yes" : "No"}\nAdvert type: ${adType}\nDimensions: ${adType === "logo" ? "Logo" : dimensions}\nActivation: ${activationDate}\nExpiry: ${expiryDate}\nTerm: ${months} month(s)\nPrice: R${price}/month\n\nNext steps:\n1. Verify that payment has cleared and matches order reference ${newOrderNumber}. Check the proof of payment sent to ${ADMIN_EMAIL}.\n2. Do not approve the application until payment is verified.\n3. In Admin, open Adverts, find order ${newOrderNumber}, and click Accept. The advert will remain unpublished until approved.`,
-        },
-      });
 
       setOrderNumber(newOrderNumber);
       setSubmitted(true);
