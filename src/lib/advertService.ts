@@ -73,10 +73,9 @@ function fromRow(r: any): Advertisement {
 function live(table: string, select: string, cb: (rows: Advertisement[]) => void) {
   let alive = true;
   const load = async () => {
-    const { data, error } = await supabase
-      .from(table as "advertisements")
-      .select(select)
-      .order("created_at", { ascending: false });
+    let q = supabase.from(table as "advertisements").select(select);
+    if (table === "advertisements") q = q.order("created_at", { ascending: false });
+    const { data, error } = await q;
     if (error) {
       console.error(`${table} load error:`, error);
       if (alive) cb([]);
@@ -103,7 +102,7 @@ export function subscribeToAdvertisements(cb: (ads: Advertisement[]) => void) {
 /** Public: live adverts from the public view. */
 export function subscribeToActiveAdvertisements(cb: (ads: Advertisement[]) => void) {
   return live("public_advertisements", "*", (ads) =>
-    cb(ads.map((a) => ({ ...a, status: a.status || "approved", enabled: a.enabled || true })).filter((a) => isAdvertisementLive(a))),
+    cb(ads.map((a) => ({ ...a, status: "approved" as const, enabled: true })).filter((a) => isAdvertisementLive(a))),
   );
 }
 
