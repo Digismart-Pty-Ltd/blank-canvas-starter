@@ -243,6 +243,7 @@ export type Database = {
       events: {
         Row: {
           after_run_place: string | null
+          archived: boolean
           created_at: string
           description: string | null
           distance_display: string | null
@@ -260,6 +261,7 @@ export type Database = {
         }
         Insert: {
           after_run_place?: string | null
+          archived?: boolean
           created_at?: string
           description?: string | null
           distance_display?: string | null
@@ -277,6 +279,7 @@ export type Database = {
         }
         Update: {
           after_run_place?: string | null
+          archived?: boolean
           created_at?: string
           description?: string | null
           distance_display?: string | null
