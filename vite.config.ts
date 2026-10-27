@@ -5,7 +5,23 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
 import { VitePWA } from "vite-plugin-pwa";
 
-export default defineConfig({
+// Public Lovable Cloud connection values (safe to ship; data is protected by
+// database policies). Used only when .env is missing from the build, e.g.
+// when a .gitignore rule strips it.
+const CLOUD_FALLBACK = {
+  VITE_SUPABASE_URL: "https://fsilgicucpwxbblvngus.supabase.co",
+  VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_3lBzLdRowrGB0DDHP4bUJw_OHjGQuMK",
+  VITE_SUPABASE_PROJECT_ID: "fsilgicucpwxbblvngus",
+};
+
+export default defineConfig(({ mode }) => {
+  const env = { ...process.env, ...loadEnv(mode, process.cwd(), "VITE_") };
+  const define: Record<string, string> = {};
+  for (const [key, value] of Object.entries(CLOUD_FALLBACK)) {
+    if (!env[key]) define[`import.meta.env.${key}`] = JSON.stringify(value);
+  }
+  return {
+  define,
   plugins: [
     react(),
     tailwindcss(),
