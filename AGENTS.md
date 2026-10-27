@@ -5,3 +5,4 @@
 - Events with bookings are archived, never hard-deleted, because bookings keep members' race history (the database enforces this).
 - Web push uses standard VAPID subscriptions saved via `register_push_token` and sent by the `send-push` function, avoiding any third-party push vendor.
 - Keep admin display-state decisions in a small pure helper with executable access-rule tests so loading and signed-out states cannot accidentally reveal the dashboard.
+- vite.config.ts injects the public Cloud URL/publishable key only when .env is absent, because GitHub syncs have stripped .env and blanked the published site.
