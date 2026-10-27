@@ -1,144 +1,101 @@
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  serverTimestamp,
-  query,
-  orderBy,
-} from "firebase/firestore";
-import { db, storage } from "./firebase";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { supabase } from "@/integrations/supabase/client";
+import { toEvent, type EventRow } from "@/lib/api/events";
+import { compressImage, safeName } from "@/lib/imageCompress";
 import type { Event } from "./demo-data";
 
-const EVENTS_COL = "events";
+type EventInput = Partial<Omit<Event, "id" | "attendees">> & {
+  imageOrientation?: string | null;
+  distanceDisplay?: string | null;
+};
 
-// ── Resize/compress an image file, then upload it to Firebase Storage ───────
-// Returns a download URL that gets stored on the event doc — never a base64
-// blob — so Firestore docs stay tiny and the admin/events lists don't have
-// to decode multi-hundred-KB strings per event in memory (this was the
-// source of the Android OOM crashes on the admin Events tab).
-export async function uploadEventImage(
-  file: File,
-  onProgress?: (pct: number) => void,
-): Promise<string> {
+const COLS =
+  "id, title, event_date, event_time, meeting_place, after_run_place, description, image_url, members_only, distance_km, distance_display, image_orientation";
+
+function toRow(d: EventInput) {
+  const row: Record<string, unknown> = {};
+  if (d.title !== undefined) row.title = d.title;
+  if (d.date !== undefined) row.event_date = d.date;
+  if (d.time !== undefined) row.event_time = d.time || null;
+  if (d.meetingPlace !== undefined) row.meeting_place = d.meetingPlace;
+  if (d.afterRunPlace !== undefined) row.after_run_place = d.afterRunPlace;
+  if (d.description !== undefined) row.description = d.description;
+  if (d.image !== undefined) row.image_url = d.image || null;
+  if (d.membersOnly !== undefined) row.members_only = d.membersOnly;
+  if (d.imageOrientation !== undefined) row.image_orientation = d.imageOrientation;
+  if (d.distanceKm !== undefined) {
+    const n = Number(d.distanceKm);
+    const numeric = d.distanceKm !== "" && Number.isFinite(n);
+    row.distance_km = numeric ? n : null;
+    row.distance_display = numeric ? (d.distanceDisplay ?? null) : String(d.distanceKm) || null;
+  }
+  return row;
+}
+
+/** Compress and upload an event photo to private storage. Returns the stored path. */
+export async function uploadEventImage(file: File, onProgress?: (pct: number) => void): Promise<string> {
   onProgress?.(5);
-
-  const objectUrl = URL.createObjectURL(file);
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    const img = new Image();
-
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-
-      try {
-        // Cap at 1200px wide/tall to keep uploads small and fast to load
-        const MAX_W = 1200;
-        const MAX_H = 1200;
-        let { width, height } = img;
-
-        if (width > MAX_W) {
-          height = Math.round((height * MAX_W) / width);
-          width = MAX_W;
-        }
-        if (height > MAX_H) {
-          width = Math.round((width * MAX_H) / height);
-          height = MAX_H;
-        }
-
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("Canvas not available");
-
-        // White background so transparent PNGs look correct as JPEG
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (result) => {
-            if (result) resolve(result);
-            else reject(new Error("Could not compress image."));
-          },
-          "image/jpeg",
-          0.82,
-        );
-      } catch (canvasErr) {
-        // Canvas fallback — upload the original file untouched
-        console.error("Canvas compression failed, falling back to raw file:", canvasErr);
-        resolve(file);
-      }
-    };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("Could not decode image. Try a different file."));
-    };
-
-    img.src = objectUrl;
-  });
-
-  const path = `events/${Date.now()}-${file.name}`;
-  const storageRef = ref(storage, path);
-  const task = uploadBytesResumable(storageRef, blob);
-
-  return new Promise((resolve, reject) => {
-    task.on(
-      "state_changed",
-      (snap) => {
-        const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
-        onProgress?.(Math.max(pct, 5));
-      },
-      reject,
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        resolve(url);
-      },
-    );
-  });
+  const blob = await compressImage(file, 1200);
+  onProgress?.(40);
+  const path = `events/${Date.now()}-${safeName(file.name)}.jpg`;
+  const { error } = await supabase.storage
+    .from("event-images")
+    .upload(path, blob, { contentType: "image/jpeg", upsert: false });
+  if (error) throw error;
+  onProgress?.(100);
+  return path;
 }
 
-// ── Create event document in Firestore ───────────────────────────────────────
-export async function createEventInFirestore(
-  data: Omit<Event, "id" | "attendees">,
-): Promise<string> {
-  const docRef = await addDoc(collection(db, EVENTS_COL), {
-    ...data,
-    createdAt: serverTimestamp(),
-  });
-  return docRef.id;
+export async function createEventRecord(data: EventInput): Promise<string> {
+  const { data: row, error } = await supabase
+    .from("events")
+    .insert(toRow(data) as never)
+    .select("id")
+    .single();
+  if (error) throw error;
+  return row.id;
 }
 
-// ── Update event document in Firestore ───────────────────────────────────────
-export async function updateEventInFirestore(
-  id: string,
-  data: Partial<Omit<Event, "id" | "attendees">>,
-) {
-  await updateDoc(doc(db, EVENTS_COL, id), {
-    ...data,
-    updatedAt: serverTimestamp(),
-  });
+export async function updateEventRecord(id: string, data: EventInput) {
+  const { error } = await supabase.from("events").update(toRow(data) as never).eq("id", id);
+  if (error) throw error;
 }
 
-// ── Delete event document from Firestore ─────────────────────────────────────
-export async function deleteEventFromFirestore(id: string) {
-  await deleteDoc(doc(db, EVENTS_COL, id));
+/** Events with bookings are archived (hidden, bookings kept); others are deleted. */
+export async function removeEventRecord(id: string): Promise<"archived" | "deleted"> {
+  const { count, error: cErr } = await supabase
+    .from("event_registrations")
+    .select("id", { count: "exact", head: true })
+    .eq("event_id", id);
+  if (cErr) throw cErr;
+  if ((count ?? 0) > 0) {
+    const { error } = await supabase.from("events").update({ archived: true }).eq("id", id);
+    if (error) throw error;
+    return "archived";
+  }
+  const { error } = await supabase.from("events").delete().eq("id", id);
+  if (error) throw error;
+  return "deleted";
 }
 
-// ── Real-time listener — calls back with sorted events array ─────────────────
+/** Live list of non-archived events, oldest first. */
 export function subscribeToEvents(callback: (events: Event[]) => void): () => void {
-  const q = query(collection(db, EVENTS_COL), orderBy("date", "asc"));
-  return onSnapshot(q, (snap) => {
-    const events: Event[] = snap.docs.map((d) => ({
-      id: d.id,
-      ...(d.data() as Omit<Event, "id">),
-    }));
-    callback(events);
-  });
+  let alive = true;
+  const load = async () => {
+    const { data, error } = await supabase
+      .from("events")
+      .select(COLS)
+      .eq("archived", false)
+      .order("event_date", { ascending: true });
+    if (error) return console.error("Failed to load events:", error);
+    if (alive) callback((data as EventRow[]).map(toEvent));
+  };
+  void load();
+  const channel = supabase
+    .channel(`admin-events-${Math.random().toString(36).slice(2)}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "events" }, () => void load())
+    .subscribe();
+  return () => {
+    alive = false;
+    supabase.removeChannel(channel);
+  };
 }
