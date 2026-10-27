@@ -7,3 +7,4 @@
 - [x] Phase 5: Firebase code and packages removed
 - [ ] Phase 6: import Firebase export — waiting on export files from user
 - [ ] Removing a member from admin — needs a server function (not yet built)
+- [ ] Deliver queued advert and order emails — check sender setup, implement delivery, verify a test send
