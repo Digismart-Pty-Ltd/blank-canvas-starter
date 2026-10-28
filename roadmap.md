@@ -5,6 +5,7 @@
 - [x] Phase 3: member screens off Firebase
 - [x] Phase 4: standard web push (keys stored, subscription, send-push function)
 - [x] Phase 5: Firebase code and packages removed
-- [ ] Phase 6: import Firebase export — waiting on export files from user
+- [x] Old-orders export page (/export-old-orders)
+- [ ] Phase 6: import Firebase export + old order files — waiting on export files from user
 - [ ] Removing a member from admin — needs a server function (not yet built)
 - [ ] Deliver queued advert and order emails — blocked until user connects a verified sender domain to this project; then implement delivery and verify a test send
