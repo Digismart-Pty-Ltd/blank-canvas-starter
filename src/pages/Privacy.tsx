@@ -75,7 +75,7 @@ export default function Privacy() {
             <ul className="mt-3 space-y-2 list-none">
               {[
                 "Manage your membership and participation in events",
-                "Track tier progression and rewards (Bronze → Silver → Gold → Platinum)",
+                "Track tier progression and rewards (Pink → Silver → Gold → Platinum)",
                 "Enable geo-location check-ins at events",
                 "Send event reminders and notifications",
                 "Maintain records of accepted indemnity waivers",

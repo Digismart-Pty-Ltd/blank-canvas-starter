@@ -22,7 +22,7 @@ const faqs = [
   },
   {
     q: "How does the tier system work?",
-    a: "Tiers are based on races attended per calendar year: Bronze (start), Silver (12 races), Gold (24 races), Platinum (36 races). Tiers reset on 1 January each year. Platinum is retained if you attend at least 12 races in the first 6 months of the year — otherwise you drop one level.",
+    a: "Tiers are based on races attended per calendar year: Pink (start), Silver (12 races), Gold (24 races), Platinum (36 races). Tiers reset on 1 January each year. Platinum is retained if you attend at least 12 races in the first 6 months of the year — otherwise you drop one level.",
   },
   {
     q: "How do I check in at an event?",

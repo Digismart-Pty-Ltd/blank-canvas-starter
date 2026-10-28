@@ -29,6 +29,13 @@
       "when": 1793096011876,
       "tag": "0003_events_archived_restrict",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793181362046,
+      "tag": "0004_automatic_tier_rules",
+      "breakpoints": true
     }
   ]
 }
