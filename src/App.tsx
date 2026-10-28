@@ -24,6 +24,7 @@ const Privacy = lazy(() => import("@/pages/Privacy"));
 const Support = lazy(() => import("@/pages/Support"));
 const AdvertiseApply = lazy(() => import("@/pages/AdvertiseApply"));
 const Advertisements = lazy(() => import("@/pages/Advertisements"));
+const ExportOldOrders = lazy(() => import("@/pages/ExportOldOrders"));
 
 
 const queryClient = new QueryClient();
@@ -173,6 +174,7 @@ export default function App() {
                   <Route path="/support" element={<Support />} />
                   <Route path="/advertise" element={<AdvertiseApply />} />
                   <Route path="/advertisements" element={<Advertisements />} />
+                  <Route path="/export-old-orders" element={<ExportOldOrders />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>
                 {/* Admin has its own layout */}
