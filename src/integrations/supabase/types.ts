@@ -742,10 +742,16 @@ export type Database = {
       }
       my_kind: { Args: never; Returns: string }
       my_tier: { Args: never; Returns: string }
+      platinum_retention_check: { Args: never; Returns: undefined }
       queue_admin_email: {
         Args: { p_body: string; p_subject: string }
         Returns: undefined
       }
+      races_between: {
+        Args: { p_from: string; p_to: string; p_user: string }
+        Returns: number
+      }
+      recompute_tier: { Args: { p_user: string }; Returns: undefined }
       redeem_reward: {
         Args: { p_code: string; p_reward_id: string }
         Returns: undefined
@@ -780,6 +786,8 @@ export type Database = {
         }
         Returns: string
       }
+      tier_rank: { Args: { t: string }; Returns: number }
+      yearly_tier_reset: { Args: never; Returns: undefined }
     }
     Enums: {
       app_role: "admin" | "member"
