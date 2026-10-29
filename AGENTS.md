@@ -6,4 +6,4 @@
 - Web push uses standard VAPID subscriptions saved via `register_push_token` and sent by the `send-push` function, avoiding any third-party push vendor.
 - Keep admin display-state decisions in a small pure helper with executable access-rule tests so loading and signed-out states cannot accidentally reveal the dashboard.
 - vite.config.ts injects the public Cloud URL/publishable key only when .env is absent, because GitHub syncs have stripped .env and blanked the published site.
-- Temporary imports use a shared IMPORT_TOKEN, validated batches, allowlisted bounded image downloads, and sanitized responses; never invoke an import without explicit approval because it bypasses member policies.
+- Temporary imports use a shared IMPORT_TOKEN, independent row validation within hard request limits, allowlisted bounded image downloads, and sanitized responses with safe record labels; never invoke an import without explicit approval because it bypasses member policies.

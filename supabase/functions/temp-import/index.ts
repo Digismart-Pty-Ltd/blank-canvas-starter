@@ -13,7 +13,7 @@ const sb = createClient(
 );
 
 
-// Validate the complete batch before any writes. Unknown fields are ignored.
+// Validate each row independently before writes. Unknown fields are ignored.
 const text = z.string().max(10000);
 const nullableText = text.nullish();
 const idValue = z.string().min(1).max(255);
@@ -21,8 +21,15 @@ const dateValue = z.union([
   z.string().max(100).refine((v) => Number.isFinite(Date.parse(v)), "Invalid date"),
   z.number().finite().refine((v) => Number.isFinite(new Date(v).getTime()), "Invalid date"),
 ]).nullish();
-const nonnegative = z.number().finite().nonnegative().nullish();
-const flag = z.boolean().optional();
+const numericValue = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+const nonnegative = z.preprocess(numericValue, z.number().finite().nonnegative().nullish());
+const flag = z.boolean().nullish();
+const distanceValue = z.unknown().transform((value) => {
+  const number = typeof value === "number" ? value :
+    typeof value === "string" ? Number.parseFloat(value.trim()) : NaN;
+  return Number.isFinite(number) ? number : null;
+});
 const imageValue = z.string().max(15_000_000).refine((value) => {
   if (value === "") return true;
   const data = value.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/);
@@ -32,7 +39,7 @@ const imageValue = z.string().max(15_000_000).refine((value) => {
 const userRow = z.object({
   id: idValue, email: z.string().trim().email().max(254), name: nullableText,
   idNumber: nullableText, contact: nullableText, emergency: nullableText,
-  role: z.enum(["open", "member", "admin"]).optional(), waiverAccepted: flag,
+  role: z.enum(["open", "member", "admin"]).nullish(), waiverAccepted: flag,
   tier: nullableText, rewardsPending: nonnegative, lastRun: dateValue,
   joined: dateValue, createdAt: dateValue, waiverAcceptedAt: dateValue,
   avatarUrl: imageValue, tierResetAt: dateValue, lastTierCheck: dateValue,
@@ -46,7 +53,10 @@ const rowSchemas = {
     id: idValue, title: z.string().min(1).max(1000), date: dateValue,
     time: z.string().regex(/^(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/).nullish(),
     meetingPlace: nullableText, afterRunPlace: nullableText, description: nullableText,
-    image: imageValue, membersOnly: flag, distanceKm: nonnegative,
+    image: imageValue, membersOnly: flag, distanceKm: distanceValue,
+    distanceDisplay: nullableText,
+    imageOrientation: z.unknown().transform((value) =>
+      value === "landscape" || value === "portrait" ? value : null),
     createdAt: dateValue, updatedAt: dateValue,
   }),
   eventRegistrations: z.object({
@@ -57,8 +67,8 @@ const rowSchemas = {
   notifications: z.object({
     id: idValue, title: nullableText, body: nullableText, audience: nullableText,
     minTier: nullableText, userId: idValue.nullish(), link: nullableText,
-    createdAt: dateValue, readBy: z.array(idValue).max(5000).optional(),
-    deletedBy: z.array(idValue).max(5000).optional(),
+    createdAt: dateValue, readBy: z.array(idValue).max(5000).nullish(),
+    deletedBy: z.array(idValue).max(5000).nullish(),
   }),
   advertisements: z.object({
     id: idValue, orderNumber: idValue, businessName: z.string().min(1).max(1000),
@@ -66,7 +76,7 @@ const rowSchemas = {
     contactName: nullableText, contactEmail: z.string().email().max(254).nullish(),
     contactPhone: nullableText, isMember: flag, price: nonnegative, adType: nullableText,
     imageUrl: imageValue, dimensions: nullableText, activationDate: dateValue,
-    months: z.number().int().nonnegative().nullish(), expiryDate: dateValue,
+    months: z.preprocess(numericValue, z.number().int().nonnegative().nullish()), expiryDate: dateValue,
     status: nullableText, enabled: flag, createdAt: dateValue,
   }),
   orders: z.object({
@@ -74,8 +84,8 @@ const rowSchemas = {
     email: z.string().email().max(254), phone: nullableText, notes: nullableText,
     batched: flag, createdAt: dateValue,
     lines: z.array(z.object({ product: nullableText, colour: nullableText,
-      size: nullableText, qty: z.number().int().positive().max(10000).optional(),
-    })).max(200).optional(),
+      size: nullableText, qty: z.preprocess(numericValue, z.number().int().positive().max(10000).nullish()),
+    })).max(200).nullish(),
   }),
 };
 const requestSchema = z.object({
@@ -122,6 +132,35 @@ const safeWarning = (message: string) => {
     message.includes("not allowed") ? "UNSUPPORTED VALUE" : "IMPORT WARNING";
   return `${category}: inspect the source record locally; details withheld for privacy`;
 };
+
+// Record labels are restricted so malformed IDs cannot expose URLs or inject text.
+const recordLabel = (row: unknown, index: number): string => {
+  const id = row && typeof row === "object" && "id" in row ? row.id : undefined;
+  return typeof id === "string" && /^[\w.-]{1,255}$/.test(id) ? id : `row-${index + 1}`;
+};
+function validateRows(step: keyof typeof rowSchemas, rows: unknown[], warnings: string[]): any[] {
+  const valid: any[] = [];
+  rows.forEach((row, index) => {
+    const id = recordLabel(row, index);
+    let candidate = row;
+    if (step === "events" && row && typeof row === "object" && "image" in row &&
+        !imageValue.safeParse(row.image).success) {
+      candidate = { ...row, image: null };
+      warnings.push(`${step}: record ${id} image source not allowed, image_url set to null`);
+    }
+    const parsed = rowSchemas[step].safeParse(candidate);
+    if (!parsed.success) {
+      const fields = new Set(parsed.error.issues.map((issue) =>
+        issue.path.length ? issue.path.join(".") : "record"));
+      for (const field of fields) {
+        warnings.push(`${step}: record ${id} skipped, invalid field ${field}`);
+      }
+      return;
+    }
+    valid.push(parsed.data);
+  });
+  return valid;
+}
 
 const TIERS = ["Pink", "Silver", "Gold", "Platinum"];
 const AUDIENCES = ["all", "members", "open"];
@@ -227,7 +266,7 @@ const steps: Record<string, (rows: any[], warn: Warn) => Promise<number>> = {
       }
       const { error: e2 } = await sb.from("profiles").update({ legacy_uid: u.id }).eq("id", id);
       if (e2) warn(`legacy_uid ${email}: ${e2.message}`);
-      n++;
+      else n++;
     }
     return n;
   },
@@ -243,6 +282,7 @@ const steps: Record<string, (rows: any[], warn: Warn) => Promise<number>> = {
         description: e.description ?? null,
         image_url: await storeImage(e.image, "event-images", `events/${safe(e.id)}`, warn),
         members_only: !!e.membersOnly, distance_km: e.distanceKm ?? null,
+        distance_display: e.distanceDisplay ?? null, image_orientation: e.imageOrientation ?? null,
         created_at: ts(e.createdAt), updated_at: ts(e.updatedAt ?? e.createdAt),
       });
     }
@@ -404,13 +444,12 @@ Deno.serve(async (req) => {
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid request; maximum 200 rows" }, 400);
   const { step, rows } = parsed.data;
-  const batch = z.array(rowSchemas[step]).safeParse(rows);
-  if (!batch.success) return json({ error: "invalid record fields", fields: batch.error.issues.map((issue) => issue.path.join(".")) }, 400);
   const fn = steps[step];
   if (!fn) return json({ error: "unknown step" }, 400);
   const warnings: string[] = [];
+  const validRows = validateRows(step, rows, warnings);
   try {
-    const count = await fn(batch.data, (message) => warnings.push(safeWarning(message)));
+    const count = validRows.length ? await fn(validRows, (message) => warnings.push(safeWarning(message))) : 0;
     return json({ ok: true, count, warnings });
   } catch {
     return json({ error: "Import operation failed; some earlier records may have been saved", warnings }, 500);
